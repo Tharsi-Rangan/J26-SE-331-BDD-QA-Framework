@@ -1,0 +1,49 @@
+{
+  "contract": "c1.validated-requirements",
+  "schema_version": "1.0.0",
+  "producer": { "component": "MANUAL_FIXTURE", "tool_version": "fixture" },
+  "run_id": "RUN-FIXTURE-EX-1",
+  "generated_at": "2026-10-05T09:00:00+05:30",
+  "source_document": { "name": "Example mini-SRS", "project_code": "EX", "path": "docs/mini-srs/example.md", "redaction_applied": false },
+  "requirements": [
+    {
+      "requirement_id": "REQ-EX-001",
+      "kind": "functional",
+      "source": { "section": "3.1 Registration", "line": 12 },
+      "original_text": "The system should allow users of a suitable age to register.",
+      "defects": [
+        {
+          "type": "vague",
+          "detector": "rule",
+          "evidence_span": "suitable age",
+          "explanation": "The allowed age is not stated, so it cannot be tested.",
+          "confidence": 0.92
+        }
+      ],
+      "tier": "TIER_1_AUTO_REFINE",
+      "clarification_questions": [],
+      "grounding": {
+        "status": "supported",
+        "evidence": [
+          { "chunk_id": "SRS-2.3-c1", "section": "2.3 User classes", "text": "Members must be between 18 and 65 years old.", "similarity": 0.81 }
+        ]
+      },
+      "consistency": { "status": "consistent", "related_requirement_ids": [], "conflicts": [] },
+      "candidates": [
+        {
+          "candidate_id": "CAND-1",
+          "text": "The system shall register a user only if the user's age is from 18 to 65 years inclusive, and shall reject any other age with a validation error.",
+          "scores": { "quality": 0.9, "grounding": 0.88, "consistency": 1.0, "bdd_readiness": 0.93 }
+        }
+      ],
+      "selected_candidate_id": "CAND-1",
+      "validation": {
+        "status": "passed",
+        "checks": { "quality": "pass", "grounding": "pass", "consistency": "pass", "bdd_readiness": "pass" }
+      },
+      "human_decision": "approved",
+      "final_text": "The system shall register a user only if the user's age is from 18 to 65 years inclusive, and shall reject any other age with a validation error.",
+      "bdd_ready": true
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "contract": "shared.subject-manifest",
+  "schema_version": "1.0.0",
+  "subjects": [
+    {
+      "subject_id": "SUB-PILOT-1",
+      "project": "TODO-bugsjs-project",
+      "project_code": "PILOTA",
+      "source": { "kind": "bugsjs", "bug_id": "TODO", "buggy_ref": "TODO", "fixed_ref": "TODO" },
+      "module_path": "TODO/path/to/module.js",
+      "exports": ["TODO"],
+      "module_system": "commonjs",
+      "requirement_ids": ["REQ-PILOTA-001"],
+      "notes": "Template. Fill in by Sat 3 Oct (task SH-03). Add SUB-PILOT-2 and SUB-PILOT-3."
+    }
+  ]
+}

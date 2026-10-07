@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://j26-se-331.local/contracts/c3-confidence-report.schema.json",
+  "title": "C3 -> C4 / human review: generation_confidence_report.json",
+  "description": "Producer: C3. One entry per scenario C3 received. Confidence is a weighted formula over rule-based signals, not the model's own confidence.",
+  "type": "object",
+  "allOf": [{ "$ref": "common.schema.json#/$defs/envelope" }],
+  "required": ["contract", "subject_id", "formula", "scenarios"],
+  "properties": {
+    "contract": { "const": "c3.confidence-report" },
+    "subject_id": { "$ref": "common.schema.json#/$defs/subjectId" },
+    "formula": {
+      "type": "object",
+      "required": ["version", "weights", "threshold"],
+      "properties": {
+        "version": { "$ref": "common.schema.json#/$defs/semver" },
+        "weights": { "type": "object", "additionalProperties": { "type": "number" } },
+        "threshold": { "$ref": "common.schema.json#/$defs/score01" },
+        "calibrated": { "type": "boolean", "default": false }
+      },
+      "additionalProperties": false
+    },
+    "scenarios": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["scenario_id", "requirement_id", "signals", "confidence", "route", "reason"],
+        "properties": {
+          "scenario_id": { "$ref": "common.schema.json#/$defs/scenarioId" },
+          "requirement_id": { "$ref": "common.schema.json#/$defs/requirementId" },
+          "signals": { "type": "object", "additionalProperties": { "type": ["number", "boolean"] } },
+          "confidence": { "$ref": "common.schema.json#/$defs/score01" },
+          "route": { "enum": ["runnable", "stub", "skipped_not_verified"] },
+          "reason": { "type": "string", "minLength": 5 },
+          "test_ids": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/testId" } },
+          "stub_id": { "$ref": "common.schema.json#/$defs/stubId" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "unevaluatedProperties": false
+}

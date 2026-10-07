@@ -1,0 +1,50 @@
+{
+  "contract": "c4.adequacy-report",
+  "schema_version": "1.0.0",
+  "producer": { "component": "MANUAL_FIXTURE", "tool_version": "fixture" },
+  "run_id": "RUN-FIXTURE-EX-1",
+  "generated_at": "2026-10-08T09:00:00+05:30",
+  "upstream": [{ "contract": "c3.test-manifest", "path": "c3/test_manifest.json", "schema_version": "1.0.0" }],
+  "subject_id": "SUB-EX-1",
+  "config": { "trace_signal": "coverage_only", "stryker_version": "10.0.0", "coverage_analysis": "perTest", "mutate": ["subject-src/src/registration.js"] },
+  "summary": {
+    "mutants_total": 14, "killed": 13, "survived": 1, "no_coverage": 0, "timeout": 0,
+    "equivalent_filtered": 0, "mutation_score": 0.9286, "mutation_score_filtered": 0.9286
+  },
+  "requirements": [
+    { "requirement_id": "REQ-EX-001", "mutants_traced": 14, "killed": 13, "survived": 1, "score": 0.9286, "status": "at_risk" }
+  ],
+  "survivors": [
+    {
+      "mutant_id": "12",
+      "file": "subject-src/src/registration.js",
+      "location": { "start": { "line": 8, "column": 31 }, "end": { "line": 8, "column": 49 } },
+      "mutator": "StringLiteral",
+      "replacement": "\"\"",
+      "status": "Survived",
+      "equivalent": false,
+      "trace": {
+        "test_ids": ["TST-EX-001-02-01", "TST-EX-001-02-06"],
+        "scenario_ids": ["SCN-EX-001-02"],
+        "requirement_ids": ["REQ-EX-001"],
+        "signal": "coverage",
+        "confidence": 1
+      },
+      "gap": {
+        "type": "weak_assertion",
+        "evidence": "expect(() => registerUser({ age, email })).toThrow(ValidationError);",
+        "explanation": "The rejection tests check the error type but not its message, so emptying the message is not detected."
+      }
+    }
+  ],
+  "recommendations": [
+    {
+      "rec_id": "REC-001", "rank": 1, "route_to": "C3", "gap_type": "weak_assertion",
+      "target": { "requirement_id": "REQ-EX-001", "scenario_id": "SCN-EX-001-02", "test_id": "TST-EX-001-02-01" },
+      "mutant_ids": ["12"],
+      "action": "If the requirement defines the error message, add a message check to the exception assertion template; if not, ask C1 to make the message part of the requirement or mark the mutant as not requirement-relevant.",
+      "predicted_impact": 0.0714,
+      "status": "open"
+    }
+  ]
+}

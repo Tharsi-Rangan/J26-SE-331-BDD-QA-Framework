@@ -1,0 +1,13 @@
+# Owners must approve PRs that touch their paths (see docs/INTEGRATION_RULES.md).
+*                                   @Tharsi-Rangan
+/packages/c1-requirement-quality/   @Jathusan-Jesuthasan
+/packages/c2-gherkin-generation/    @Shanchika
+/packages/c3-test-generation/       @Tharsi-Rangan
+/packages/c4-mutation-adequacy/     @Shajana9
+/packages/orchestrator/             @Tharsi-Rangan
+/packages/contracts/                @Jathusan-Jesuthasan @Shanchika @Tharsi-Rangan @Shajana9
+/fixtures/subjects/                 @Tharsi-Rangan @Shajana9
+/fixtures/golden/**/c1/             @Jathusan-Jesuthasan
+/fixtures/golden/**/c2/             @Shanchika
+/fixtures/golden/**/c3/             @Tharsi-Rangan
+/fixtures/golden/**/c4/             @Shajana9

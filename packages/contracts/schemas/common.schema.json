@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://j26-se-331.local/contracts/common.schema.json",
+  "title": "J26-SE-331 shared definitions",
+  "description": "IDs, envelope and enums shared by every contract. Change only through a 'contract-change' PR approved by all four members.",
+  "$defs": {
+    "projectCode": {
+      "description": "Short upper-case code for the subject or dataset, e.g. EXPRESS, PURE, EX.",
+      "type": "string",
+      "pattern": "^[A-Z0-9]{2,10}$"
+    },
+    "requirementId": {
+      "description": "Owned by C1. REQ-<projectCode>-<3-4 digits>. Never re-used, never renumbered.",
+      "type": "string",
+      "pattern": "^REQ-[A-Z0-9]{2,10}-[0-9]{3,4}$",
+      "examples": ["REQ-EX-001"]
+    },
+    "scenarioId": {
+      "description": "Owned by C2. SCN-<projectCode>-<req number>-<2 digits>. The middle part repeats the requirement number so the link is visible by eye.",
+      "type": "string",
+      "pattern": "^SCN-[A-Z0-9]{2,10}-[0-9]{3,4}-[0-9]{2}$",
+      "examples": ["SCN-EX-001-03"]
+    },
+    "testId": {
+      "description": "Owned by C3. TST-<scenario part>-<2 digits>. One scenario can produce several test cases (e.g. one per Examples row).",
+      "type": "string",
+      "pattern": "^TST-[A-Z0-9]{2,10}-[0-9]{3,4}-[0-9]{2}-[0-9]{2}$",
+      "examples": ["TST-EX-001-03-01"]
+    },
+    "stubId": {
+      "description": "Owned by C3. STB-<scenario part>.",
+      "type": "string",
+      "pattern": "^STB-[A-Z0-9]{2,10}-[0-9]{3,4}-[0-9]{2}$"
+    },
+    "subjectId": {
+      "description": "Owned jointly by C3 and C4 in fixtures/subjects/subject-manifest.json.",
+      "type": "string",
+      "pattern": "^SUB-[A-Z0-9-]{2,30}$",
+      "examples": ["SUB-EX-1"]
+    },
+    "runId": {
+      "description": "Created once by the orchestrator (or by hand for fixtures) and copied unchanged by every stage.",
+      "type": "string",
+      "pattern": "^RUN-[0-9]{8}-[0-9]{6}-[a-z0-9]{4}$|^RUN-FIXTURE-[A-Z0-9-]+$"
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "component": {
+      "type": "string",
+      "enum": ["C1", "C2", "C3", "C4", "ORCHESTRATOR", "MANUAL_FIXTURE"]
+    },
+    "relativePath": {
+      "description": "POSIX path relative to the run folder or repo root. No leading slash, no backslashes, no '..'.",
+      "type": "string",
+      "pattern": "^(?!/)(?!.*\\\\)(?!.*\\.\\.)[^\\s].*$"
+    },
+    "score01": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "envelope": {
+      "description": "Header every contract file must carry.",
+      "type": "object",
+      "required": ["contract", "schema_version", "producer", "run_id", "generated_at"],
+      "properties": {
+        "contract": { "type": "string" },
+        "schema_version": { "$ref": "#/$defs/semver" },
+        "producer": {
+          "type": "object",
+          "required": ["component", "tool_version"],
+          "properties": {
+            "component": { "$ref": "#/$defs/component" },
+            "tool_version": { "type": "string" },
+            "model": {
+              "description": "Model name and tag if a model was used, e.g. qwen2.5-coder:7b-instruct.",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "run_id": { "$ref": "#/$defs/runId" },
+        "generated_at": { "type": "string", "format": "date-time" },
+        "upstream": {
+          "description": "Contract files this file was built from (traceability across stages).",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["contract", "path"],
+            "properties": {
+              "contract": { "type": "string" },
+              "path": { "$ref": "#/$defs/relativePath" },
+              "schema_version": { "$ref": "#/$defs/semver" }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "defectType": {
+      "type": "string",
+      "enum": ["vague", "ambiguous", "incomplete", "non_measurable", "non_verifiable"]
+    },
+    "refinementTier": {
+      "description": "TIER_1 = auto-refine, TIER_2 = ask clarification, TIER_3 = escalate to human.",
+      "type": "string",
+      "enum": ["TIER_1_AUTO_REFINE", "TIER_2_CLARIFY", "TIER_3_ESCALATE"]
+    },
+    "scenarioType": {
+      "type": "string",
+      "enum": ["positive", "negative", "boundary", "edge"]
+    },
+    "checkStatus": {
+      "type": "string",
+      "enum": ["pass", "fail", "skipped"]
+    },
+    "assertionCategory": {
+      "type": "string",
+      "enum": ["equality", "exception", "state_change", "range"]
+    },
+    "generationStrategy": {
+      "type": "string",
+      "enum": ["parametrised", "factory", "property_based"]
+    },
+    "gapType": {
+      "type": "string",
+      "enum": ["missing_test", "weak_assertion", "untested_branch", "incomplete_mock", "missing_boundary"]
+    },
+    "strykerMutantStatus": {
+      "description": "Exactly the status strings StrykerJS writes in mutation.json.",
+      "type": "string",
+      "enum": ["Killed", "Survived", "NoCoverage", "Timeout", "CompileError", "RuntimeError", "Ignored", "Pending"]
+    }
+  }
+}

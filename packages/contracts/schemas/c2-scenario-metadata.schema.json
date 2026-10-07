@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://j26-se-331.local/contracts/c2-scenario-metadata.schema.json",
+  "title": "C2 -> C3: scenario_metadata.json (+ .feature files)",
+  "description": "Producer: C2 (Shanchika). Consumer: C3 (Tharsiga), later C4. The .feature file is the single source of truth for step TEXT; this file carries analysis (constraints, EP, BVA, verification). C3 processes ONLY scenarios with verification.fully_verified = true. C3 must NOT re-derive boundary values; it uses boundary_values and equivalence_partitions from here.",
+  "type": "object",
+  "allOf": [{ "$ref": "common.schema.json#/$defs/envelope" }],
+  "required": ["contract", "features", "scenarios"],
+  "properties": {
+    "contract": { "const": "c2.scenario-metadata" },
+    "features": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["feature_file", "requirement_id", "feature_name"],
+        "properties": {
+          "feature_file": { "$ref": "common.schema.json#/$defs/relativePath" },
+          "requirement_id": { "$ref": "common.schema.json#/$defs/requirementId" },
+          "feature_name": { "type": "string" },
+          "requirement_text_used": { "type": "string", "description": "Copy of C1 final_text actually used (for audit)." }
+        },
+        "additionalProperties": false
+      }
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/scenario" }
+    }
+  },
+  "unevaluatedProperties": false,
+  "$defs": {
+    "constraint": {
+      "type": "object",
+      "required": ["constraint_id", "parameter", "kind"],
+      "properties": {
+        "constraint_id": { "type": "string", "pattern": "^CON-[0-9]{2}$" },
+        "parameter": { "type": "string", "description": "Input name as it appears in the scenario, e.g. 'age'." },
+        "kind": { "enum": ["range", "length", "date", "count", "enum", "format", "other"] },
+        "data_type": { "enum": ["integer", "number", "string", "date", "boolean"] },
+        "min": { "type": ["number", "string", "null"] },
+        "max": { "type": ["number", "string", "null"] },
+        "min_inclusive": { "type": "boolean", "default": true },
+        "max_inclusive": { "type": "boolean", "default": true },
+        "step": { "type": ["number", "null"], "description": "Smallest change used for +/- 1 values (1 for integers, 0.01 for money, etc.)." },
+        "allowed_values": { "type": "array" },
+        "unit": { "type": "string" },
+        "source_phrase": { "type": "string", "description": "Words in the requirement that gave this constraint." }
+      },
+      "additionalProperties": false
+    },
+    "partition": {
+      "type": "object",
+      "required": ["partition_id", "constraint_id", "validity", "description", "representative"],
+      "properties": {
+        "partition_id": { "type": "string", "pattern": "^EP-[0-9]{2}$" },
+        "constraint_id": { "type": "string", "pattern": "^CON-[0-9]{2}$" },
+        "validity": { "enum": ["valid", "invalid"] },
+        "description": { "type": "string" },
+        "representative": { "description": "One value from this class." }
+      },
+      "additionalProperties": false
+    },
+    "boundary": {
+      "type": "object",
+      "required": ["boundary_id", "constraint_id", "position", "value", "expected"],
+      "properties": {
+        "boundary_id": { "type": "string", "pattern": "^BV-[0-9]{2}$" },
+        "constraint_id": { "type": "string", "pattern": "^CON-[0-9]{2}$" },
+        "position": { "enum": ["below_min", "min", "above_min", "nominal", "below_max", "max", "above_max"] },
+        "value": {},
+        "expected": { "enum": ["accept", "reject"] }
+      },
+      "additionalProperties": false
+    },
+    "scenario": {
+      "type": "object",
+      "required": [
+        "scenario_id", "requirement_id", "feature_file", "scenario_name",
+        "scenario_type", "is_outline", "verification"
+      ],
+      "properties": {
+        "scenario_id": { "$ref": "common.schema.json#/$defs/scenarioId" },
+        "requirement_id": { "$ref": "common.schema.json#/$defs/requirementId" },
+        "feature_file": { "$ref": "common.schema.json#/$defs/relativePath" },
+        "scenario_name": { "type": "string", "description": "Must equal the Scenario/Scenario Outline title in the .feature file." },
+        "line": { "type": "integer", "minimum": 1 },
+        "scenario_type": { "$ref": "common.schema.json#/$defs/scenarioType" },
+        "is_outline": { "type": "boolean" },
+        "constraints": { "type": "array", "items": { "$ref": "#/$defs/constraint" } },
+        "equivalence_partitions": { "type": "array", "items": { "$ref": "#/$defs/partition" } },
+        "boundary_values": { "type": "array", "items": { "$ref": "#/$defs/boundary" } },
+        "examples": {
+          "description": "For Scenario Outlines: one entry per Examples row, in the same order as the .feature file.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["row_index", "values"],
+            "properties": {
+              "row_index": { "type": "integer", "minimum": 1 },
+              "values": { "type": "object" },
+              "boundary_ref": { "type": "string", "pattern": "^BV-[0-9]{2}$" },
+              "partition_ref": { "type": "string", "pattern": "^EP-[0-9]{2}$" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "generation": {
+          "type": "object",
+          "properties": {
+            "mode": { "enum": ["llm_only_baseline", "boundary_aware"] },
+            "regeneration_rounds": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "verification": {
+          "type": "object",
+          "required": ["syntax", "requirement_consistency", "ep_coverage", "bva_coverage", "completeness", "fully_verified"],
+          "properties": {
+            "syntax": { "$ref": "common.schema.json#/$defs/checkStatus" },
+            "requirement_consistency": {
+              "type": "object",
+              "required": ["status"],
+              "properties": {
+                "status": { "$ref": "common.schema.json#/$defs/checkStatus" },
+                "score": { "$ref": "common.schema.json#/$defs/score01" }
+              },
+              "additionalProperties": false
+            },
+            "ep_coverage": { "$ref": "common.schema.json#/$defs/checkStatus" },
+            "bva_coverage": { "$ref": "common.schema.json#/$defs/checkStatus" },
+            "completeness": { "$ref": "common.schema.json#/$defs/checkStatus" },
+            "fully_verified": { "type": "boolean" },
+            "notes": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

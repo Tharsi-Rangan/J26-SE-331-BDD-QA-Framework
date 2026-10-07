@@ -1,0 +1,11 @@
+# Frozen or generated files: never reformat them.
+packages/contracts/
+fixtures/
+pnpm-lock.yaml
+node_modules/
+dist/
+runs/
+reports/
+coverage/
+# Markdown is written by hand; do not let format-on-save rewrap it.
+*.md
