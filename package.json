@@ -1,0 +1,23 @@
+{
+  "name": "j26-se-331",
+  "private": true,
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "validate:contracts": "node packages/contracts/scripts/validate.mjs packages/contracts/fixtures/golden/example-registration",
+    "test": "pnpm -r --if-present run test",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "build": "pnpm -r --if-present run build",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "c2": "pnpm --filter @j26/c2-gherkin-generation run cli",
+    "c3": "pnpm --filter @j26/c3-test-generation run cli",
+    "c4": "pnpm --filter @j26/c4-mutation-adequacy run cli",
+    "orch": "pnpm --filter @j26/orchestrator run cli"
+  },
+  "devDependencies": {
+    "prettier": "^3.9.9"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "contract": "shared.subject-manifest",
+  "schema_version": "1.0.0",
+  "subjects": [
+    {
+      "subject_id": "SUB-EX-1",
+      "project": "example",
+      "project_code": "EX",
+      "source": { "kind": "example", "repo_path": "subject-src" },
+      "module_path": "src/registration.js",
+      "exports": ["registerUser"],
+      "module_system": "commonjs",
+      "jest_config": "jest.config.js",
+      "requirement_ids": ["REQ-EX-001"],
+      "notes": "Teaching example only. Replace with the 3 real BugsJS pilot subjects in fixtures/subjects/subject-manifest.json."
+    }
+  ]
+}

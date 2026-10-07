@@ -1,0 +1,30 @@
+{
+  "name": "@j26/c3-test-generation",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Runnable Test Generation with Explainable Assertions and Mocking - owner Tharsiga R.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "c3": "dist/cli.js"
+  },
+  "scripts": {
+    "cli": "tsx src/cli.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@j26/contracts": "workspace:*",
+    "@cucumber/gherkin": "^30.0.4",
+    "@cucumber/messages": "^26.0.1",
+    "ts-morph": "^28.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "vitest": "^5.0.3"
+  }
+}

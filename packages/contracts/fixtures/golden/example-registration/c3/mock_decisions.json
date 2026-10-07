@@ -1,0 +1,35 @@
+{
+  "contract": "c3.mock-decisions",
+  "schema_version": "1.0.0",
+  "producer": { "component": "MANUAL_FIXTURE", "tool_version": "fixture" },
+  "run_id": "RUN-FIXTURE-EX-1",
+  "generated_at": "2026-10-07T09:00:00+05:30",
+  "subject_id": "SUB-EX-1",
+  "rules_version": "0.1.0",
+  "decisions": [
+    {
+      "decision_id": "MD-001", "scenario_id": "SCN-EX-001-01", "module_path": "src/registration.js",
+      "dependency": { "import_specifier": "./userRepository", "symbol": "save", "kind": "internal_module", "resolved_path": "src/userRepository.js", "type_signature": "(user: any) => any", "side_effect": "database" },
+      "decision": "mock", "rule_id": "R-03",
+      "reason": "Dependency performs database I/O; tests must not touch a real database.",
+      "behaviour": {
+        "derived_from_steps": ["Given the user repository is available", "When a user registers with age 30 and email \"amal@example.com\""],
+        "summary": "save() returns the given user with id 'u1'.",
+        "rationale": "The Given step says the repository is available, so save succeeds and echoes the stored user.",
+        "model": "qwen2.5-coder:7b-instruct"
+      }
+    },
+    {
+      "decision_id": "MD-002", "scenario_id": "SCN-EX-001-02", "module_path": "src/registration.js",
+      "dependency": { "import_specifier": "./userRepository", "symbol": "save", "kind": "internal_module", "resolved_path": "src/userRepository.js", "type_signature": "(user: any) => any", "side_effect": "database" },
+      "decision": "mock", "rule_id": "R-03",
+      "reason": "Dependency performs database I/O; tests must not touch a real database.",
+      "behaviour": {
+        "derived_from_steps": ["Given the user repository is available"],
+        "summary": "save() returns the given user with id 'u1'; call count is checked.",
+        "rationale": "Rejected ages must never reach the repository, so the mock is also used to assert 'not called'.",
+        "model": "qwen2.5-coder:7b-instruct"
+      }
+    }
+  ]
+}

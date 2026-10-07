@@ -1,0 +1,75 @@
+{
+  "contract": "c3.test-manifest",
+  "schema_version": "1.0.0",
+  "producer": { "component": "MANUAL_FIXTURE", "tool_version": "fixture" },
+  "run_id": "RUN-FIXTURE-EX-1",
+  "generated_at": "2026-10-07T09:00:00+05:30",
+  "upstream": [{ "contract": "c2.scenario-metadata", "path": "c2/scenario_metadata.json", "schema_version": "1.0.0" }],
+  "subject_id": "SUB-EX-1",
+  "runner": { "name": "jest", "version": "29", "config_path": "jest.config.js", "test_root": "c3/runnable_tests" },
+  "tests": [
+    {
+      "test_id": "TST-EX-001-01-01", "scenario_id": "SCN-EX-001-01", "requirement_id": "REQ-EX-001",
+      "file": "c3/runnable_tests/REQ-EX-001.test.js",
+      "jest_full_name": "[REQ-EX-001] User registration age limit [SCN-EX-001-01][TST-EX-001-01-01] Register a user with a valid age :: age 30",
+      "strategy": "factory", "assertion_categories": ["equality", "state_change"], "mock_decision_ids": ["MD-001"],
+      "verification": { "syntactic": "pass", "referential": "pass", "traceability": "pass", "semantic": { "status": "pass", "score": 0.86 } },
+      "repair_rounds": 0
+    },
+    {
+      "test_id": "TST-EX-001-02-01", "scenario_id": "SCN-EX-001-02", "requirement_id": "REQ-EX-001",
+      "file": "c3/runnable_tests/REQ-EX-001.test.js",
+      "jest_full_name": "[REQ-EX-001] User registration age limit [SCN-EX-001-02][TST-EX-001-02-01] Age at and around the limits :: age 17 -> rejected",
+      "examples_row": 1, "boundary_ref": "BV-01",
+      "strategy": "parametrised", "assertion_categories": ["exception"], "mock_decision_ids": ["MD-002"],
+      "verification": { "syntactic": "pass", "referential": "pass", "traceability": "pass", "semantic": { "status": "pass", "score": 0.83 } },
+      "repair_rounds": 1
+    },
+    {
+      "test_id": "TST-EX-001-02-02", "scenario_id": "SCN-EX-001-02", "requirement_id": "REQ-EX-001",
+      "file": "c3/runnable_tests/REQ-EX-001.test.js",
+      "jest_full_name": "[REQ-EX-001] User registration age limit [SCN-EX-001-02][TST-EX-001-02-02] Age at and around the limits :: age 18 -> accepted",
+      "examples_row": 2, "boundary_ref": "BV-02",
+      "strategy": "parametrised", "assertion_categories": ["state_change"], "mock_decision_ids": ["MD-002"],
+      "verification": { "syntactic": "pass", "referential": "pass", "traceability": "pass", "semantic": { "status": "pass", "score": 0.83 } },
+      "repair_rounds": 1
+    },
+    {
+      "test_id": "TST-EX-001-02-03", "scenario_id": "SCN-EX-001-02", "requirement_id": "REQ-EX-001",
+      "file": "c3/runnable_tests/REQ-EX-001.test.js",
+      "jest_full_name": "[REQ-EX-001] User registration age limit [SCN-EX-001-02][TST-EX-001-02-03] Age at and around the limits :: age 19 -> accepted",
+      "examples_row": 3, "boundary_ref": "BV-03",
+      "strategy": "parametrised", "assertion_categories": ["state_change"], "mock_decision_ids": ["MD-002"],
+      "verification": { "syntactic": "pass", "referential": "pass", "traceability": "pass", "semantic": { "status": "pass", "score": 0.83 } },
+      "repair_rounds": 1
+    },
+    {
+      "test_id": "TST-EX-001-02-04", "scenario_id": "SCN-EX-001-02", "requirement_id": "REQ-EX-001",
+      "file": "c3/runnable_tests/REQ-EX-001.test.js",
+      "jest_full_name": "[REQ-EX-001] User registration age limit [SCN-EX-001-02][TST-EX-001-02-04] Age at and around the limits :: age 64 -> accepted",
+      "examples_row": 4, "boundary_ref": "BV-04",
+      "strategy": "parametrised", "assertion_categories": ["state_change"], "mock_decision_ids": ["MD-002"],
+      "verification": { "syntactic": "pass", "referential": "pass", "traceability": "pass", "semantic": { "status": "pass", "score": 0.83 } },
+      "repair_rounds": 1
+    },
+    {
+      "test_id": "TST-EX-001-02-05", "scenario_id": "SCN-EX-001-02", "requirement_id": "REQ-EX-001",
+      "file": "c3/runnable_tests/REQ-EX-001.test.js",
+      "jest_full_name": "[REQ-EX-001] User registration age limit [SCN-EX-001-02][TST-EX-001-02-05] Age at and around the limits :: age 65 -> accepted",
+      "examples_row": 5, "boundary_ref": "BV-05",
+      "strategy": "parametrised", "assertion_categories": ["state_change"], "mock_decision_ids": ["MD-002"],
+      "verification": { "syntactic": "pass", "referential": "pass", "traceability": "pass", "semantic": { "status": "pass", "score": 0.83 } },
+      "repair_rounds": 1
+    },
+    {
+      "test_id": "TST-EX-001-02-06", "scenario_id": "SCN-EX-001-02", "requirement_id": "REQ-EX-001",
+      "file": "c3/runnable_tests/REQ-EX-001.test.js",
+      "jest_full_name": "[REQ-EX-001] User registration age limit [SCN-EX-001-02][TST-EX-001-02-06] Age at and around the limits :: age 66 -> rejected",
+      "examples_row": 6, "boundary_ref": "BV-06",
+      "strategy": "parametrised", "assertion_categories": ["exception"], "mock_decision_ids": ["MD-002"],
+      "verification": { "syntactic": "pass", "referential": "pass", "traceability": "pass", "semantic": { "status": "pass", "score": 0.83 } },
+      "repair_rounds": 1
+    }
+  ],
+  "stubs": []
+}

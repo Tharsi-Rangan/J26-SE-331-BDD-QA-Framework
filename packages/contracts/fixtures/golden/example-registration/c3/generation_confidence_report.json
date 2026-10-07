@@ -1,0 +1,30 @@
+{
+  "contract": "c3.confidence-report",
+  "schema_version": "1.0.0",
+  "producer": { "component": "MANUAL_FIXTURE", "tool_version": "fixture" },
+  "run_id": "RUN-FIXTURE-EX-1",
+  "generated_at": "2026-10-07T09:00:00+05:30",
+  "subject_id": "SUB-EX-1",
+  "formula": {
+    "version": "0.1.0",
+    "weights": { "all_deterministic_checks_pass": 0.4, "semantic_score": 0.3, "no_repair_needed": 0.15, "c2_fully_verified": 0.15 },
+    "threshold": 0.7,
+    "calibrated": false
+  },
+  "scenarios": [
+    {
+      "scenario_id": "SCN-EX-001-01", "requirement_id": "REQ-EX-001",
+      "signals": { "all_deterministic_checks_pass": true, "semantic_score": 0.86, "no_repair_needed": true, "c2_fully_verified": true },
+      "confidence": 0.96, "route": "runnable",
+      "reason": "All four checks passed first time.",
+      "test_ids": ["TST-EX-001-01-01"]
+    },
+    {
+      "scenario_id": "SCN-EX-001-02", "requirement_id": "REQ-EX-001",
+      "signals": { "all_deterministic_checks_pass": true, "semantic_score": 0.83, "no_repair_needed": false, "c2_fully_verified": true },
+      "confidence": 0.8, "route": "runnable",
+      "reason": "All checks passed after one repair round.",
+      "test_ids": ["TST-EX-001-02-01", "TST-EX-001-02-02", "TST-EX-001-02-03", "TST-EX-001-02-04", "TST-EX-001-02-05", "TST-EX-001-02-06"]
+    }
+  ]
+}

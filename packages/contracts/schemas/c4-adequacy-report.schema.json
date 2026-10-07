@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://j26-se-331.local/contracts/c4-adequacy-report.schema.json",
+  "title": "C4 -> C1/C2/C3: adequacy_report.json",
+  "description": "Producer: C4 (Shajana). Consumers: C1, C2, C3 (routed recommendations) and humans. C4's SQLite trace store is internal; this JSON is the only thing other components read.",
+  "type": "object",
+  "allOf": [{ "$ref": "common.schema.json#/$defs/envelope" }],
+  "required": ["contract", "subject_id", "config", "summary", "requirements", "survivors", "recommendations"],
+  "properties": {
+    "contract": { "const": "c4.adequacy-report" },
+    "subject_id": { "$ref": "common.schema.json#/$defs/subjectId" },
+    "config": {
+      "type": "object",
+      "required": ["trace_signal", "stryker_version"],
+      "properties": {
+        "trace_signal": { "enum": ["coverage_only", "embedding_assisted", "full"] },
+        "stryker_version": { "type": "string" },
+        "coverage_analysis": { "const": "perTest" },
+        "mutate": { "type": "array", "items": { "type": "string" } },
+        "embedding_model": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "summary": {
+      "type": "object",
+      "required": ["mutants_total", "killed", "survived", "no_coverage", "timeout", "equivalent_filtered", "mutation_score", "mutation_score_filtered"],
+      "properties": {
+        "mutants_total": { "type": "integer", "minimum": 0 },
+        "killed": { "type": "integer", "minimum": 0 },
+        "survived": { "type": "integer", "minimum": 0 },
+        "no_coverage": { "type": "integer", "minimum": 0 },
+        "timeout": { "type": "integer", "minimum": 0 },
+        "equivalent_filtered": { "type": "integer", "minimum": 0 },
+        "mutation_score": { "$ref": "common.schema.json#/$defs/score01" },
+        "mutation_score_filtered": { "$ref": "common.schema.json#/$defs/score01" }
+      },
+      "additionalProperties": false
+    },
+    "requirements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["requirement_id", "mutants_traced", "killed", "survived", "score", "status"],
+        "properties": {
+          "requirement_id": { "$ref": "common.schema.json#/$defs/requirementId" },
+          "mutants_traced": { "type": "integer", "minimum": 0 },
+          "killed": { "type": "integer", "minimum": 0 },
+          "survived": { "type": "integer", "minimum": 0 },
+          "score": { "$ref": "common.schema.json#/$defs/score01" },
+          "status": { "enum": ["protected", "at_risk", "unprotected"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "survivors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["mutant_id", "file", "location", "mutator", "status", "equivalent", "trace"],
+        "properties": {
+          "mutant_id": { "type": "string", "description": "Stryker mutant id, unchanged." },
+          "file": { "$ref": "common.schema.json#/$defs/relativePath" },
+          "location": {
+            "type": "object",
+            "required": ["start", "end"],
+            "properties": {
+              "start": { "$ref": "#/$defs/position" },
+              "end": { "$ref": "#/$defs/position" }
+            },
+            "additionalProperties": false
+          },
+          "mutator": { "type": "string" },
+          "replacement": { "type": "string" },
+          "status": { "$ref": "common.schema.json#/$defs/strykerMutantStatus" },
+          "equivalent": { "type": "boolean" },
+          "trace": {
+            "type": "object",
+            "required": ["test_ids", "scenario_ids", "requirement_ids", "signal"],
+            "properties": {
+              "test_ids": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/testId" } },
+              "scenario_ids": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/scenarioId" } },
+              "requirement_ids": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/requirementId" } },
+              "signal": { "enum": ["coverage", "embedding", "coverage+embedding", "none"] },
+              "confidence": { "$ref": "common.schema.json#/$defs/score01" }
+            },
+            "additionalProperties": false
+          },
+          "gap": {
+            "type": ["object", "null"],
+            "required": ["type", "evidence", "explanation"],
+            "properties": {
+              "type": { "$ref": "common.schema.json#/$defs/gapType" },
+              "evidence": { "type": "string", "description": "Code snippet or test line that shows the gap." },
+              "explanation": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "recommendations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["rec_id", "rank", "route_to", "gap_type", "target", "action", "status"],
+        "properties": {
+          "rec_id": { "type": "string", "pattern": "^REC-[0-9]{3}$" },
+          "rank": { "type": "integer", "minimum": 1 },
+          "route_to": { "enum": ["C1", "C2", "C3"] },
+          "gap_type": { "$ref": "common.schema.json#/$defs/gapType" },
+          "target": {
+            "type": "object",
+            "properties": {
+              "requirement_id": { "$ref": "common.schema.json#/$defs/requirementId" },
+              "scenario_id": { "$ref": "common.schema.json#/$defs/scenarioId" },
+              "test_id": { "$ref": "common.schema.json#/$defs/testId" }
+            },
+            "minProperties": 1,
+            "additionalProperties": false
+          },
+          "mutant_ids": { "type": "array", "items": { "type": "string" } },
+          "action": { "type": "string", "minLength": 5 },
+          "predicted_impact": { "type": "number" },
+          "status": { "enum": ["open", "applied", "rejected"] }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "unevaluatedProperties": false,
+  "$defs": {
+    "position": {
+      "type": "object",
+      "required": ["line", "column"],
+      "properties": {
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

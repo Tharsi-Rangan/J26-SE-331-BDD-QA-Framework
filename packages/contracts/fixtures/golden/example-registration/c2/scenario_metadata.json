@@ -1,0 +1,85 @@
+{
+  "contract": "c2.scenario-metadata",
+  "schema_version": "1.0.0",
+  "producer": { "component": "MANUAL_FIXTURE", "tool_version": "fixture" },
+  "run_id": "RUN-FIXTURE-EX-1",
+  "generated_at": "2026-10-06T09:00:00+05:30",
+  "upstream": [{ "contract": "c1.validated-requirements", "path": "c1/validated_requirements.json", "schema_version": "1.0.0" }],
+  "features": [
+    {
+      "feature_file": "c2/features/REQ-EX-001.feature",
+      "requirement_id": "REQ-EX-001",
+      "feature_name": "User registration age limit",
+      "requirement_text_used": "The system shall register a user only if the user's age is from 18 to 65 years inclusive, and shall reject any other age with a validation error."
+    }
+  ],
+  "scenarios": [
+    {
+      "scenario_id": "SCN-EX-001-01",
+      "requirement_id": "REQ-EX-001",
+      "feature_file": "c2/features/REQ-EX-001.feature",
+      "scenario_name": "Register a user with a valid age",
+      "line": 7,
+      "scenario_type": "positive",
+      "is_outline": false,
+      "constraints": [
+        { "constraint_id": "CON-01", "parameter": "age", "kind": "range", "data_type": "integer", "min": 18, "max": 65, "min_inclusive": true, "max_inclusive": true, "step": 1, "unit": "years", "source_phrase": "from 18 to 65 years inclusive" }
+      ],
+      "equivalence_partitions": [
+        { "partition_id": "EP-02", "constraint_id": "CON-01", "validity": "valid", "description": "18 <= age <= 65", "representative": 30 }
+      ],
+      "boundary_values": [],
+      "generation": { "mode": "boundary_aware", "regeneration_rounds": 0 },
+      "verification": {
+        "syntax": "pass",
+        "requirement_consistency": { "status": "pass", "score": 0.91 },
+        "ep_coverage": "pass",
+        "bva_coverage": "skipped",
+        "completeness": "pass",
+        "fully_verified": true
+      }
+    },
+    {
+      "scenario_id": "SCN-EX-001-02",
+      "requirement_id": "REQ-EX-001",
+      "feature_file": "c2/features/REQ-EX-001.feature",
+      "scenario_name": "Age at and around the limits",
+      "line": 13,
+      "scenario_type": "boundary",
+      "is_outline": true,
+      "constraints": [
+        { "constraint_id": "CON-01", "parameter": "age", "kind": "range", "data_type": "integer", "min": 18, "max": 65, "min_inclusive": true, "max_inclusive": true, "step": 1, "unit": "years", "source_phrase": "from 18 to 65 years inclusive" }
+      ],
+      "equivalence_partitions": [
+        { "partition_id": "EP-01", "constraint_id": "CON-01", "validity": "invalid", "description": "age < 18", "representative": 10 },
+        { "partition_id": "EP-02", "constraint_id": "CON-01", "validity": "valid", "description": "18 <= age <= 65", "representative": 30 },
+        { "partition_id": "EP-03", "constraint_id": "CON-01", "validity": "invalid", "description": "age > 65", "representative": 80 }
+      ],
+      "boundary_values": [
+        { "boundary_id": "BV-01", "constraint_id": "CON-01", "position": "below_min", "value": 17, "expected": "reject" },
+        { "boundary_id": "BV-02", "constraint_id": "CON-01", "position": "min", "value": 18, "expected": "accept" },
+        { "boundary_id": "BV-03", "constraint_id": "CON-01", "position": "above_min", "value": 19, "expected": "accept" },
+        { "boundary_id": "BV-04", "constraint_id": "CON-01", "position": "below_max", "value": 64, "expected": "accept" },
+        { "boundary_id": "BV-05", "constraint_id": "CON-01", "position": "max", "value": 65, "expected": "accept" },
+        { "boundary_id": "BV-06", "constraint_id": "CON-01", "position": "above_max", "value": 66, "expected": "reject" }
+      ],
+      "examples": [
+        { "row_index": 1, "values": { "age": 17, "result": "rejected" }, "boundary_ref": "BV-01" },
+        { "row_index": 2, "values": { "age": 18, "result": "accepted" }, "boundary_ref": "BV-02" },
+        { "row_index": 3, "values": { "age": 19, "result": "accepted" }, "boundary_ref": "BV-03" },
+        { "row_index": 4, "values": { "age": 64, "result": "accepted" }, "boundary_ref": "BV-04" },
+        { "row_index": 5, "values": { "age": 65, "result": "accepted" }, "boundary_ref": "BV-05" },
+        { "row_index": 6, "values": { "age": 66, "result": "rejected" }, "boundary_ref": "BV-06" }
+      ],
+      "generation": { "mode": "boundary_aware", "regeneration_rounds": 1 },
+      "verification": {
+        "syntax": "pass",
+        "requirement_consistency": { "status": "pass", "score": 0.88 },
+        "ep_coverage": "pass",
+        "bva_coverage": "pass",
+        "completeness": "pass",
+        "fully_verified": true
+      }
+    }
+  ]
+}

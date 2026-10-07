@@ -1,0 +1,27 @@
+{
+  "name": "@j26/orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pipeline orchestrator (run folder, run_id, validation) - owner Tharsiga R.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "orch": "dist/cli.js"
+  },
+  "scripts": {
+    "cli": "tsx src/cli.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@j26/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "vitest": "^5.0.3"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "@j26/contracts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Frozen JSON contracts shared by C1-C4 (J26-SE-331). Change only through a contract-change PR.",
+  "type": "module",
+  "files": ["schemas", "conventions", "scripts"],
+  "scripts": {
+    "validate:golden": "node scripts/validate.mjs fixtures/golden/example-registration",
+    "validate": "node scripts/validate.mjs"
+  },
+  "dependencies": {
+    "@cucumber/gherkin": "^30.0.0",
+    "@cucumber/messages": "^26.0.0",
+    "ajv": "^8.17.0",
+    "ajv-formats": "^3.0.1"
+  }
+}

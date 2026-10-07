@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://j26-se-331.local/contracts/c1-validated-requirements.schema.json",
+  "title": "C1 -> C2: validated_requirements.json",
+  "description": "Producer: C1 (Jathusan). Consumer: C2 (Shanchika), later C4 for traceability. C2 must read ONLY 'final_text' and must process ONLY items where bdd_ready = true.",
+  "type": "object",
+  "allOf": [{ "$ref": "common.schema.json#/$defs/envelope" }],
+  "required": ["contract", "source_document", "requirements"],
+  "properties": {
+    "contract": { "const": "c1.validated-requirements" },
+    "source_document": {
+      "type": "object",
+      "required": ["name", "project_code"],
+      "properties": {
+        "name": { "type": "string" },
+        "project_code": { "$ref": "common.schema.json#/$defs/projectCode" },
+        "path": { "$ref": "common.schema.json#/$defs/relativePath" },
+        "redaction_applied": { "type": "boolean", "default": false }
+      },
+      "additionalProperties": false
+    },
+    "requirements": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/requirement" }
+    }
+  },
+  "unevaluatedProperties": false,
+  "$defs": {
+    "requirement": {
+      "type": "object",
+      "required": [
+        "requirement_id", "source", "original_text", "defects", "tier",
+        "grounding", "consistency", "validation", "human_decision", "final_text", "bdd_ready"
+      ],
+      "properties": {
+        "requirement_id": { "$ref": "common.schema.json#/$defs/requirementId" },
+        "kind": { "enum": ["functional", "non_functional"], "default": "functional" },
+        "source": {
+          "type": "object",
+          "required": ["section"],
+          "properties": {
+            "section": { "type": "string" },
+            "line": { "type": "integer", "minimum": 1 }
+          },
+          "additionalProperties": false
+        },
+        "original_text": { "type": "string", "minLength": 1 },
+        "defects": {
+          "description": "Empty array = no defect found.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["type", "detector", "explanation"],
+            "properties": {
+              "type": { "$ref": "common.schema.json#/$defs/defectType" },
+              "detector": { "enum": ["rule", "ml", "slm"] },
+              "evidence_span": { "type": "string", "description": "Exact words in original_text that caused the defect." },
+              "explanation": { "type": "string" },
+              "confidence": { "$ref": "common.schema.json#/$defs/score01" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "tier": { "$ref": "common.schema.json#/$defs/refinementTier" },
+        "clarification_questions": { "type": "array", "items": { "type": "string" } },
+        "grounding": {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": { "enum": ["supported", "partially_supported", "unsupported", "not_applicable"] },
+            "evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["chunk_id", "text"],
+                "properties": {
+                  "chunk_id": { "type": "string" },
+                  "section": { "type": "string" },
+                  "text": { "type": "string" },
+                  "similarity": { "$ref": "common.schema.json#/$defs/score01" }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "consistency": {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": { "enum": ["consistent", "potential_conflict", "conflict"] },
+            "related_requirement_ids": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/requirementId" } },
+            "conflicts": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["with_requirement_id", "explanation"],
+                "properties": {
+                  "with_requirement_id": { "$ref": "common.schema.json#/$defs/requirementId" },
+                  "explanation": { "type": "string" }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "candidates": {
+          "description": "Optional: all refinement candidates, for human review and C1 evaluation.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["candidate_id", "text"],
+            "properties": {
+              "candidate_id": { "type": "string" },
+              "text": { "type": "string" },
+              "scores": {
+                "type": "object",
+                "properties": {
+                  "quality": { "$ref": "common.schema.json#/$defs/score01" },
+                  "grounding": { "$ref": "common.schema.json#/$defs/score01" },
+                  "consistency": { "$ref": "common.schema.json#/$defs/score01" },
+                  "bdd_readiness": { "$ref": "common.schema.json#/$defs/score01" }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "selected_candidate_id": { "type": ["string", "null"] },
+        "validation": {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": { "enum": ["passed", "failed", "needs_review"] },
+            "checks": {
+              "type": "object",
+              "properties": {
+                "quality": { "$ref": "common.schema.json#/$defs/checkStatus" },
+                "grounding": { "$ref": "common.schema.json#/$defs/checkStatus" },
+                "consistency": { "$ref": "common.schema.json#/$defs/checkStatus" },
+                "bdd_readiness": { "$ref": "common.schema.json#/$defs/checkStatus" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "human_decision": { "enum": ["approved", "rejected", "edited", "pending", "not_required"] },
+        "final_text": {
+          "description": "THE text C2 uses. = refined text if a refinement was accepted, else original_text.",
+          "type": "string",
+          "minLength": 1
+        },
+        "bdd_ready": { "type": "boolean" }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "bdd_ready": { "const": true } } },
+          "then": {
+            "properties": {
+              "validation": { "properties": { "status": { "const": "passed" } } },
+              "human_decision": { "enum": ["approved", "edited", "not_required"] }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

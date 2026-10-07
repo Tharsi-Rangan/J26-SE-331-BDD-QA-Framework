@@ -1,0 +1,9 @@
+{
+  "recommendations": [
+    "esbenp.prettier-vscode",
+    "vitest.explorer",
+    "cucumberopen.cucumber-official",
+    "ms-python.python",
+    "editorconfig.editorconfig"
+  ]
+}

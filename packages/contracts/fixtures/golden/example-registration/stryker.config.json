@@ -1,0 +1,7 @@
+{
+  "testRunner": "jest",
+  "coverageAnalysis": "perTest",
+  "mutate": ["subject-src/src/registration.js"],
+  "reporters": ["json", "clear-text"],
+  "jest": { "configFile": "jest.config.js" }
+}
