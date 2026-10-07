@@ -17,4 +17,4 @@ jobs:
       - name: Validate golden fixtures (schemas + cross-file links)
         run: |
           node packages/contracts/scripts/validate.mjs packages/contracts/fixtures/golden/example-registration
-          for d in fixtures/golden/*/; do [ -d "$d" ] && node packages/contracts/scripts/validate.mjs "$d"; done
+          for d in fixtures/golden/*/; do if [ -d "$d" ]; then node packages/contracts/scripts/validate.mjs "$d"; fi; done
