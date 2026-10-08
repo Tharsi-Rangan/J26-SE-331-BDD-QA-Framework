@@ -6,6 +6,13 @@
 // Two kinds of checks:
 //   1. Schema checks  - each file matches its JSON Schema.
 //   2. Link checks    - IDs agree ACROSS files (the bugs that schemas alone cannot catch).
+//
+// Added after the SH-04 review, before the v1.0.0 freeze (stricter link checks only, no schema change):
+//   - .feature @type: tag must equal scenario_type
+//   - fully_verified = true is not allowed when one of C2's 5 checks failed
+//   - C3 stubs are checked like tests (scenario, ID, file)
+//   - confidence report: route <-> test_ids/stub_id, route <-> threshold, route <-> C2 fully_verified,
+//     IDs belong to the same scenario, nothing in the manifest is missing from the report
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -119,12 +126,35 @@ for (const root of process.argv.slice(2)) {
         const meta = scn.get(tag);
         if (!meta) { fail(`${f.feature_file}: @${tag} not in scenario_metadata.json`); continue; }
         if (meta.scenario_name !== sc.name) fail(`${tag}: name in metadata "${meta.scenario_name}" != feature "${sc.name}"`);
+        // [SH-04] exactly one @type:<...> tag, and it must equal scenario_type in the metadata
+        const types = sc.tags.map((t) => t.name).filter((t) => t.startsWith('@type:')).map((t) => t.slice(6));
+        if (types.length !== 1) fail(`${tag}: needs exactly one @type: tag, found ${types.length}`);
+        else if (types[0] !== meta.scenario_type) fail(`${tag}: tag @type:${types[0]} != scenario_type "${meta.scenario_type}" in metadata`);
         if (meta.is_outline !== sc.examples.length > 0) fail(`${tag}: is_outline does not match the .feature file`);
         const rows = sc.examples.reduce((n, e) => n + e.tableBody.length, 0);
         if (meta.is_outline && (meta.examples?.length ?? 0) !== rows) fail(`${tag}: ${rows} Examples rows in feature but ${meta.examples?.length ?? 0} in metadata`);
       }
     }
     done('C2 .feature files <-> metadata checked');
+  }
+
+  // [SH-04] fully_verified = true is only allowed when none of the 5 checks failed
+  // ("skipped" is fine, e.g. bva_coverage on a positive scenario with no boundaries).
+  start();
+  if (c2) {
+    for (const s of c2.scenarios) {
+      const v = s.verification;
+      const checks = {
+        syntax: v.syntax,
+        requirement_consistency: v.requirement_consistency?.status,
+        ep_coverage: v.ep_coverage,
+        bva_coverage: v.bva_coverage,
+        completeness: v.completeness,
+      };
+      const failed = Object.entries(checks).filter(([, st]) => st === 'fail').map(([k]) => k);
+      if (v.fully_verified && failed.length) fail(`C2 ${s.scenario_id} is fully_verified but these checks failed: ${failed.join(', ')}`);
+    }
+    done('C2 fully_verified agrees with its 5 checks');
   }
 
   start();
@@ -145,6 +175,26 @@ for (const root of process.argv.slice(2)) {
     dup.length ? fail(`C3 duplicate test_id: ${dup}`) : done('C3 -> C2 links and Jest names checked');
   }
 
+  // [SH-04] stubs follow the same rules as tests: known, fully verified scenario; ID embeds it; file exists
+  start();
+  if (c3) {
+    for (const st of c3.stubs) {
+      if (st.stub_id !== 'STB-' + st.scenario_id.slice(4)) fail(`C3 ${st.stub_id} does not match its scenario ${st.scenario_id}`);
+      if (!fs.existsSync(path.join(root, st.file))) fail(`C3 ${st.stub_id} file not found: ${st.file}`);
+      if (c2) {
+        const s = scn.get(st.scenario_id);
+        if (!s) fail(`C3 ${st.stub_id} points to unknown ${st.scenario_id}`);
+        else {
+          if (!s.verification.fully_verified) fail(`C3 ${st.stub_id} built from NOT fully verified ${st.scenario_id}`);
+          if (s.requirement_id !== st.requirement_id) fail(`C3 ${st.stub_id} requirement ${st.requirement_id} != scenario's ${s.requirement_id}`);
+        }
+      }
+    }
+    const dup = c3.stubs.map((s) => s.stub_id).filter((id, i, a) => a.indexOf(id) !== i);
+    if (dup.length) fail(`C3 duplicate stub_id: ${dup}`);
+    done('C3 stubs checked');
+  }
+
   start();
   if (c3 && md) {
     const mdIds = new Set(md.decisions.map((d) => d.decision_id));
@@ -153,10 +203,65 @@ for (const root of process.argv.slice(2)) {
     done('C3 mock decision links checked');
   }
 
+  // [SH-04] confidence report: each route has what it needs, routes follow the threshold (SO5),
+  // and every ID points to a real test/stub of the SAME scenario.
   start();
-  if (c3 && cr) {
-    for (const s of cr.scenarios) for (const id of s.test_ids ?? []) if (!testIds.has(id)) fail(`confidence report lists unknown ${id}`);
-    done('C3 confidence report links checked');
+  if (cr) {
+    const th = cr.formula.threshold;
+    for (const s of cr.scenarios) {
+      const id = s.scenario_id;
+      const nTests = s.test_ids?.length ?? 0;
+      if (s.route === 'runnable') {
+        if (nTests === 0) fail(`confidence report ${id}: route "runnable" but no test_ids`);
+        if (s.stub_id) fail(`confidence report ${id}: route "runnable" must not have a stub_id`);
+        if (s.confidence < th) fail(`confidence report ${id}: confidence ${s.confidence} < threshold ${th} but route is "runnable" (should be "stub")`);
+      } else if (s.route === 'stub') {
+        if (!s.stub_id) fail(`confidence report ${id}: route "stub" but no stub_id`);
+        if (nTests) fail(`confidence report ${id}: route "stub" must not list test_ids`);
+        if (s.confidence >= th) fail(`confidence report ${id}: confidence ${s.confidence} >= threshold ${th} but route is "stub" (should be "runnable")`);
+      } else if (s.route === 'skipped_not_verified') {
+        if (nTests || s.stub_id) fail(`confidence report ${id}: route "skipped_not_verified" must not have test_ids or stub_id`);
+      }
+    }
+    const dup = cr.scenarios.map((s) => s.scenario_id).filter((x, i, a) => a.indexOf(x) !== i);
+    if (dup.length) fail(`confidence report lists a scenario more than once: ${dup}`);
+
+    if (c3) {
+      const testById = new Map(c3.tests.map((t) => [t.test_id, t]));
+      const stubById = new Map(c3.stubs.map((st) => [st.stub_id, st]));
+      for (const s of cr.scenarios) {
+        for (const tid of s.test_ids ?? []) {
+          const t = testById.get(tid);
+          if (!t) fail(`confidence report lists unknown ${tid}`);
+          else if (t.scenario_id !== s.scenario_id) fail(`confidence report puts ${tid} under ${s.scenario_id}, but the test belongs to ${t.scenario_id}`);
+        }
+        if (s.stub_id) {
+          const st = stubById.get(s.stub_id);
+          if (!st) fail(`confidence report lists ${s.stub_id}, which is not in test_manifest.stubs`);
+          else if (st.scenario_id !== s.scenario_id) fail(`confidence report puts ${s.stub_id} under ${s.scenario_id}, but the stub belongs to ${st.scenario_id}`);
+        }
+      }
+      // nothing in the manifest may be missing from the report
+      const listedTests = new Set(cr.scenarios.flatMap((s) => s.test_ids ?? []));
+      const listedStubs = new Set(cr.scenarios.map((s) => s.stub_id).filter(Boolean));
+      for (const t of c3.tests) if (!listedTests.has(t.test_id)) fail(`${t.test_id} is in test_manifest but not in the confidence report`);
+      for (const st of c3.stubs) if (!listedStubs.has(st.stub_id)) fail(`${st.stub_id} is in test_manifest.stubs but not in the confidence report`);
+    }
+
+    if (c2) {
+      // one entry per scenario C3 received; "skipped_not_verified" exactly when C2 did not fully verify it
+      const crIds = new Set(cr.scenarios.map((s) => s.scenario_id));
+      for (const s of c2.scenarios) if (!crIds.has(s.scenario_id)) fail(`confidence report has no entry for ${s.scenario_id}`);
+      for (const s of cr.scenarios) {
+        const m = scn.get(s.scenario_id);
+        if (!m) { fail(`confidence report lists unknown ${s.scenario_id}`); continue; }
+        const skipped = s.route === 'skipped_not_verified';
+        if (skipped && m.verification.fully_verified) fail(`confidence report ${s.scenario_id}: "skipped_not_verified" but C2 marked it fully_verified`);
+        if (!skipped && !m.verification.fully_verified) fail(`confidence report ${s.scenario_id}: route "${s.route}" but C2 did NOT fully verify it`);
+        if (s.requirement_id !== m.requirement_id) fail(`confidence report ${s.scenario_id}: requirement ${s.requirement_id} != scenario's ${m.requirement_id}`);
+      }
+    }
+    done('C3 confidence report routes and links checked');
   }
 
   start();
