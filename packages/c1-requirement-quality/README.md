@@ -38,6 +38,21 @@ sentinel with no reported conflict; this does not claim that a conflict was
 detected. An empty `defects` array means only that no detector has reported a
 defect, not that the requirement is defect-free.
 
+Stage B adds deterministic lexical analysis in
+`src/c1_requirement_quality/quality_analyser.py`. The independent rules report
+signals for vague, ambiguous, incomplete, non-measurable, and non-verifiable
+wording. They preserve overlapping findings and copy matched evidence exactly.
+They are explainable heuristics, not a complete quality assessment: they can
+produce false positives for wording that is clarified elsewhere and false
+negatives for defects expressed without the implemented signal phrases.
+The analyser suppresses only `reliable` when the same requirement contains an
+explicit percentage-based availability or reliability target, such as `99.9%
+monthly availability` or `reliability of at least 99.9%`. It does not suppress
+`may`, `could`, or `secure` merely because technical terms or surrounding
+details are present; those signals require richer context than this lexical
+analyser provides. The CLI does not yet use this analyser, so its contract
+output leaves `defects` empty and the quality check skipped.
+
 Add dependencies to `pyproject.toml` (not a global pip install), so CI and teammates get them too.
 Copy `.env.example` to `.env` for model settings. Never commit `.env`.
 
