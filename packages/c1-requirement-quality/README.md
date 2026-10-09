@@ -56,6 +56,14 @@ output leaves `defects` empty and the quality check skipped.
 Add dependencies to `pyproject.toml` (not a global pip install), so CI and teammates get them too.
 Copy `.env.example` to `.env` for model settings. Never commit `.env`.
 
+Stage C adds deterministic standalone grounding analysis in
+`src/c1_requirement_quality/grounding_analyser.py`. It compares candidate
+claims with supplied SRS text using conservative exact-claim matching and
+returns exact evidence spans. It does not infer support from general lexical
+overlap, and its narrow conflict checks do not resolve conflicting source
+statements. The CLI does not yet use this analyser, so its contract output
+retains the Stage A grounding placeholder and skipped grounding check.
+
 ## First Planner tasks
 
 - C1-02 Mini-SRS for the 3 pilot modules + golden `c1/validated_requirements.json`
