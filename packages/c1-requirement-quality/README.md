@@ -20,7 +20,7 @@ pip install -e ".[dev]"
 ## Run and test
 
 ```
-c1 run --srs <file> --out runs/<RUN-ID>
+c1 run --srs <file> --out runs/<RUN-DIRECTORY> --run-id <RUN-ID>
 pytest
 ```
 
@@ -29,6 +29,14 @@ Validate your output against the shared contract (from the repo root):
 ```
 node packages/contracts/scripts/validate.mjs runs/<RUN-ID>
 ```
+
+Stage A writes both `c1/parsed_requirements.json` and the contract-compliant
+`c1/validated_requirements.json`. The latter intentionally keeps every
+requirement pending review. Because the frozen contract has no unchecked
+consistency status, Stage A uses `potential_conflict` as a conservative
+sentinel with no reported conflict; this does not claim that a conflict was
+detected. An empty `defects` array means only that no detector has reported a
+defect, not that the requirement is defect-free.
 
 Add dependencies to `pyproject.toml` (not a global pip install), so CI and teammates get them too.
 Copy `.env.example` to `.env` for model settings. Never commit `.env`.
