@@ -10,6 +10,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from c1_requirement_quality.quality_analyser import analyse_requirements
 from c1_requirement_quality.requirement_registry import RequirementRegistry
 from c1_requirement_quality.srs_parser import extract_requirements
 
@@ -50,7 +51,15 @@ def run(
     project_code: str = "EX",
     registry_path: Path | None = None,
 ) -> None:
-    """Parse an SRS and write intermediate and contract-compliant artifacts."""
+    """Parse an SRS, run quality analysis, and write contract-compliant artifacts.
+
+    Stage A: extract requirements with stable REQ-IDs.
+    Stage B (this commit): populate defects and validation.checks.quality using
+    the deterministic lexical quality_analyser.
+
+    Tier assignment and grounding analysis are not yet wired; those decisions
+    are pending Planner confirmation and are implemented in a later task.
+    """
     if not srs.is_file():
         raise FileNotFoundError(f"SRS file not found: {srs}")
     if not RUN_ID_PATTERN.fullmatch(run_id):
@@ -77,6 +86,12 @@ def run(
             }
         )
 
+    # Stage B: run deterministic lexical quality analysis.
+    # analyse_requirements preserves input order and is independent per requirement.
+    quality_findings: list[list[dict[str, str]]] = analyse_requirements(
+        [str(r["original_text"]) for r in requirements]
+    )
+
     c1_dir = out / "c1"
     c1_dir.mkdir(parents=True, exist_ok=True)
     output_path = c1_dir / "parsed_requirements.json"
@@ -100,7 +115,11 @@ def run(
         "requirements": [
             {
                 **requirement,
-                "defects": [],
+                "defects": findings,
+                # Tier thresholds are not documented in this repository.
+                # They must be confirmed on the Planner board before
+                # implementation. Kept at the conservative sentinel until
+                # that decision is recorded.
                 "tier": "TIER_3_ESCALATE",
                 "grounding": {"status": "not_applicable"},
                 # The frozen contract has no unchecked status. This
@@ -111,9 +130,13 @@ def run(
                     "conflicts": [],
                 },
                 "validation": {
+                    # validation.status remains "needs_review": grounding and
+                    # consistency checks are still skipped, and human_decision
+                    # is still pending. A requirement is never promoted to
+                    # "passed" by quality analysis alone.
                     "status": "needs_review",
                     "checks": {
-                        "quality": "skipped",
+                        "quality": "fail" if findings else "pass",
                         "grounding": "skipped",
                         "consistency": "skipped",
                         "bdd_readiness": "skipped",
@@ -123,7 +146,9 @@ def run(
                 "final_text": requirement["original_text"],
                 "bdd_ready": False,
             }
-            for requirement in requirements
+            for requirement, findings in zip(
+                requirements, quality_findings, strict=True
+            )
         ],
     }
     validated_output_path = c1_dir / "validated_requirements.json"

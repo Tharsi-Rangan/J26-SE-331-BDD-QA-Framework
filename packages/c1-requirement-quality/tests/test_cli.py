@@ -194,9 +194,88 @@ def test_validated_output_has_contract_fields_and_pending_analysis(tmp_path):
         "redaction_applied": False,
     }
     requirement = output["requirements"][0]
+    # SRS text "The system shall allow registration." fires no lexical rule.
     assert requirement["defects"] == []
     assert requirement["consistency"]["status"] == "potential_conflict"
     assert requirement["validation"]["status"] == "needs_review"
+    # Quality analysis is now live: a clean requirement yields "pass", not "skipped".
+    assert requirement["validation"]["checks"]["quality"] == "pass"
     assert requirement["validation"]["checks"]["consistency"] == "skipped"
+    assert requirement["human_decision"] == "pending"
+    assert requirement["bdd_ready"] is False
+
+
+def test_defective_requirement_populates_defects_and_quality_fail(tmp_path):
+    """A requirement containing a lexical defect signal must surface in defects[]
+    and set validation.checks.quality to 'fail'. The BDD gate must stay closed."""
+    srs = tmp_path / "defective.md"
+    # "may" triggers the ambiguous rule in quality_analyser.
+    srs.write_text(
+        "1. The system may allow users to log in.\n",
+        encoding="utf-8",
+    )
+
+    assert main([
+        "run",
+        "--srs", str(srs),
+        "--out", str(tmp_path / "run"),
+        "--run-id", "RUN-20261009-181600-ab12",
+    ]) == 0
+
+    import json
+
+    output = json.loads(
+        (tmp_path / "run" / "c1" / "validated_requirements.json")
+        .read_text(encoding="utf-8")
+    )
+    requirement = output["requirements"][0]
+
+    # Defects must be non-empty and each entry must have the required contract keys.
+    assert len(requirement["defects"]) >= 1
+    for defect in requirement["defects"]:
+        assert "type" in defect
+        assert "detector" in defect
+        assert "explanation" in defect
+        assert "confidence" not in defect  # rule-based detector carries no confidence
+
+    # quality check must be "fail" when defects are found.
+    assert requirement["validation"]["checks"]["quality"] == "fail"
+
+    # Conservative gates are unchanged: quality analysis alone does not promote readiness.
+    assert requirement["validation"]["status"] == "needs_review"
+    assert requirement["human_decision"] == "pending"
+    assert requirement["bdd_ready"] is False
+
+
+def test_clean_requirement_produces_empty_defects_and_quality_pass(tmp_path):
+    """A requirement with no lexical defect signals must have defects=[] and
+    validation.checks.quality='pass'. The BDD gate must stay closed."""
+    srs = tmp_path / "clean.md"
+    # This text is used in the quality_analyser unit test to assert zero findings.
+    srs.write_text(
+        "1. The system shall reject an invalid password with a validation error.\n",
+        encoding="utf-8",
+    )
+
+    assert main([
+        "run",
+        "--srs", str(srs),
+        "--out", str(tmp_path / "run"),
+        "--run-id", "RUN-20261009-181600-ab12",
+    ]) == 0
+
+    import json
+
+    output = json.loads(
+        (tmp_path / "run" / "c1" / "validated_requirements.json")
+        .read_text(encoding="utf-8")
+    )
+    requirement = output["requirements"][0]
+
+    assert requirement["defects"] == []
+    assert requirement["validation"]["checks"]["quality"] == "pass"
+
+    # Conservative gates are unchanged: quality analysis alone does not promote readiness.
+    assert requirement["validation"]["status"] == "needs_review"
     assert requirement["human_decision"] == "pending"
     assert requirement["bdd_ready"] is False
