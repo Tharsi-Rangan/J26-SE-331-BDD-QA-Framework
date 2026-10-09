@@ -122,7 +122,8 @@
                   "quality": { "$ref": "common.schema.json#/$defs/score01" },
                   "grounding": { "$ref": "common.schema.json#/$defs/score01" },
                   "consistency": { "$ref": "common.schema.json#/$defs/score01" },
-                  "bdd_readiness": { "$ref": "common.schema.json#/$defs/score01" }
+                  "bdd_readiness": { "$ref": "common.schema.json#/$defs/score01" },
+                  "downstream": { "$ref": "common.schema.json#/$defs/score01", "description": "Optional, C1 research only: score from testing this candidate against downstream C2 results. Not used by C2 and not one of the 4 PP1 selection checks." }
                 },
                 "additionalProperties": false
               }
