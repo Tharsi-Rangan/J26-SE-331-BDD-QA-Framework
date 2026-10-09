@@ -7,9 +7,9 @@
 //   1. Schema checks  - each file matches its JSON Schema.
 //   2. Link checks    - IDs agree ACROSS files (the bugs that schemas alone cannot catch).
 //
-// Added after the SH-04 review, before the v1.0.0 freeze (stricter link checks only, no schema change):
+// Added after the SH-04 review, before the v1.0.0 freeze (stricter link checks + 3 OPTIONAL fields, no required field changed):
 //   - .feature @type: tag must equal scenario_type
-//   - fully_verified = true is not allowed when one of C2's 5 checks failed
+//   - fully_verified = true is not allowed when one of C2's checks failed (incl. optional grounding/adversarial)
 //   - C3 stubs are checked like tests (scenario, ID, file)
 //   - confidence report: route <-> test_ids/stub_id, route <-> threshold, route <-> C2 fully_verified,
 //     IDs belong to the same scenario, nothing in the manifest is missing from the report
@@ -138,8 +138,9 @@ for (const root of process.argv.slice(2)) {
     done('C2 .feature files <-> metadata checked');
   }
 
-  // [SH-04] fully_verified = true is only allowed when none of the 5 checks failed
-  // ("skipped" is fine, e.g. bva_coverage on a positive scenario with no boundaries).
+  // [SH-04] fully_verified = true is only allowed when none of C2's checks failed
+  // (the 5 required ones + the optional grounding / adversarial ones when present;
+  //  "skipped" is fine, e.g. bva_coverage on a positive scenario with no boundaries).
   start();
   if (c2) {
     for (const s of c2.scenarios) {
@@ -150,11 +151,13 @@ for (const root of process.argv.slice(2)) {
         ep_coverage: v.ep_coverage,
         bva_coverage: v.bva_coverage,
         completeness: v.completeness,
+        grounding: v.grounding,
+        adversarial: v.adversarial,
       };
       const failed = Object.entries(checks).filter(([, st]) => st === 'fail').map(([k]) => k);
       if (v.fully_verified && failed.length) fail(`C2 ${s.scenario_id} is fully_verified but these checks failed: ${failed.join(', ')}`);
     }
-    done('C2 fully_verified agrees with its 5 checks');
+    done('C2 fully_verified agrees with its checks');
   }
 
   start();

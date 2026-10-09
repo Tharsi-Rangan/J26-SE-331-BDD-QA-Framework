@@ -18,7 +18,8 @@ Frozen interfaces between C1 → C2 → C3 → C4 (J26-SE-331).
 - C3 processes only scenarios with `verification.fully_verified: true` and uses C2's boundary values as-is.
 - `jest_full_name` must match what StrykerJS prints, so C4 can trace tests to requirements.
 - C3 confidence routing: `runnable` if `confidence >= formula.threshold`, otherwise `stub`; `skipped_not_verified` only for scenarios C2 did not fully verify. Every C2 scenario, test and stub appears in the confidence report.
-- In every `.feature` scenario, the single `@type:` tag equals `scenario_type` in the metadata, and `fully_verified: true` is never set when one of C2's checks is `fail`.
+- In every `.feature` scenario, the single `@type:` tag equals `scenario_type` in the metadata, and `fully_verified: true` is never set when one of C2's checks is `fail` (including the optional `grounding` and `adversarial` checks; `skipped` is allowed).
+- Optional fields added in the SH-04 review: C1 `candidates[].scores.downstream` (C1 research only, C2 ignores it); C2 `verification.grounding` and `verification.adversarial`.
 - Every file carries the same `run_id`.
 
 ## Golden example
