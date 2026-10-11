@@ -18,6 +18,7 @@ Frozen interfaces between C1 → C2 → C3 → C4 (J26-SE-331).
 - C3 processes only scenarios with `verification.fully_verified: true` and uses C2's boundary values as-is.
 - `jest_full_name` must match what StrykerJS prints, so C4 can trace tests to requirements.
 - Every file carries the same `run_id`.
+- C4 `survivors` lists every `Survived` and `NoCoverage` mutant. `mutation_score` = (killed + timeout) / (killed + timeout + survived + no_coverage), as StrykerJS computes it; `mutation_score_filtered` removes the `equivalent` survivors from the bottom. Per requirement, `score` = killed / (killed + survived). Scores are rounded to 4 decimals.
 
 ## Golden example
 `fixtures/golden/example-registration/` is one complete, valid chain (requirement → scenarios → Jest tests → real StrykerJS result: 14 mutants, 13 killed, 1 survived).

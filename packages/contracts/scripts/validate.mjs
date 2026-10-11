@@ -171,6 +171,81 @@ for (const root of process.argv.slice(2)) {
     done('C4 trace links checked');
   }
 
+  // [SH-04] C4 internal consistency: survivors <-> summary, trace chain, requirements, recommendations
+  start();
+  if (c4) {
+    const s = c4.summary;
+    const near = (a, b) => Math.abs(a - b) < 0.0005; // scores are rounded to 4 decimals
+    const surv = new Map(c4.survivors.map((m) => [m.mutant_id, m]));
+    if (surv.size !== c4.survivors.length) fail('C4 duplicate mutant_id in survivors');
+    const count = (st) => c4.survivors.filter((m) => m.status === st).length;
+    for (const m of c4.survivors) if (!['Survived', 'NoCoverage'].includes(m.status)) fail(`C4 survivor ${m.mutant_id} has status ${m.status}`);
+    if (count('Survived') !== s.survived) fail(`C4 summary.survived = ${s.survived} but survivors has ${count('Survived')} Survived`);
+    if (count('NoCoverage') !== s.no_coverage) fail(`C4 summary.no_coverage = ${s.no_coverage} but survivors has ${count('NoCoverage')} NoCoverage`);
+    const equiv = c4.survivors.filter((m) => m.equivalent).length;
+    if (equiv !== s.equivalent_filtered) fail(`C4 summary.equivalent_filtered = ${s.equivalent_filtered} but ${equiv} survivors are equivalent`);
+    const detected = s.killed + s.timeout;
+    const valid = detected + s.survived + s.no_coverage;
+    if (valid > 0 && !near(s.mutation_score, detected / valid)) fail(`C4 mutation_score ${s.mutation_score} != (killed + timeout) / (killed + timeout + survived + no_coverage) = ${(detected / valid).toFixed(4)}`);
+    if (valid - equiv > 0 && !near(s.mutation_score_filtered, detected / (valid - equiv))) fail(`C4 mutation_score_filtered ${s.mutation_score_filtered} != ${(detected / (valid - equiv)).toFixed(4)}`);
+
+    // summary must agree with the raw StrykerJS report when it is in the folder
+    const raw = load(root, 'c4/raw/mutation.json');
+    if (raw) {
+      const rawMutants = new Map(Object.values(raw.files).flatMap((f) => f.mutants).map((m) => [m.id, m]));
+      const rawCount = (st) => [...rawMutants.values()].filter((m) => m.status === st).length;
+      if (rawMutants.size !== s.mutants_total) fail(`C4 mutants_total = ${s.mutants_total} but raw/mutation.json has ${rawMutants.size}`);
+      for (const [k, st] of [['killed', 'Killed'], ['survived', 'Survived'], ['no_coverage', 'NoCoverage'], ['timeout', 'Timeout']])
+        if (rawCount(st) !== s[k]) fail(`C4 summary.${k} = ${s[k]} but raw/mutation.json has ${rawCount(st)} ${st}`);
+      for (const m of c4.survivors) {
+        const r = rawMutants.get(m.mutant_id);
+        if (!r) fail(`C4 survivor ${m.mutant_id} is not in raw/mutation.json`);
+        else if (r.status !== m.status) fail(`C4 survivor ${m.mutant_id} status ${m.status} != raw ${r.status}`);
+      }
+    }
+
+    // trace chain: each test's scenario and each scenario's requirement must also be listed
+    const testById = new Map(c3?.tests.map((t) => [t.test_id, t]) ?? []);
+    for (const m of c4.survivors) {
+      for (const id of m.trace.test_ids) {
+        const t = testById.get(id);
+        if (t && !m.trace.scenario_ids.includes(t.scenario_id)) fail(`C4 mutant ${m.mutant_id} traces to ${id} but not to its scenario ${t.scenario_id}`);
+      }
+      for (const id of m.trace.scenario_ids) {
+        const sc = scn.get(id);
+        if (sc && !m.trace.requirement_ids.includes(sc.requirement_id)) fail(`C4 mutant ${m.mutant_id} traces to ${id} but not to its requirement ${sc.requirement_id}`);
+      }
+      if (m.trace.signal === 'none' && m.trace.test_ids.length + m.trace.scenario_ids.length + m.trace.requirement_ids.length > 0) fail(`C4 mutant ${m.mutant_id} has signal "none" but lists trace IDs`);
+    }
+
+    if (c3 && c4.subject_id !== c3.subject_id) fail(`C4 subject_id ${c4.subject_id} != test_manifest subject_id ${c3.subject_id}`);
+    if (sm && !sm.subjects.some((x) => x.subject_id === c4.subject_id)) fail(`C4 subject_id ${c4.subject_id} is not in subject-manifest.json`);
+
+    const reqRows = c4.requirements.map((r) => r.requirement_id);
+    const dupReq = reqRows.filter((id, i, a) => a.indexOf(id) !== i);
+    if (dupReq.length) fail(`C4 requirements lists a requirement more than once: ${dupReq}`);
+    for (const r of c4.requirements) {
+      if (c1 && !reqIds.has(r.requirement_id)) fail(`C4 requirements lists unknown ${r.requirement_id}`);
+      if (r.killed + r.survived > r.mutants_traced) fail(`C4 ${r.requirement_id}: killed + survived > mutants_traced`);
+      if (r.killed + r.survived > 0 && !near(r.score, r.killed / (r.killed + r.survived))) fail(`C4 ${r.requirement_id}: score ${r.score} != killed / (killed + survived) = ${(r.killed / (r.killed + r.survived)).toFixed(4)}`);
+    }
+
+    const recIds = c4.recommendations.map((r) => r.rec_id);
+    if (new Set(recIds).size !== recIds.length) fail('C4 duplicate rec_id');
+    const ranks = c4.recommendations.map((r) => r.rank);
+    if (new Set(ranks).size !== ranks.length) fail('C4 two recommendations have the same rank');
+    for (const r of c4.recommendations) {
+      for (const id of r.mutant_ids ?? []) if (!surv.has(id)) fail(`C4 ${r.rec_id} lists mutant ${id}, which is not in survivors`);
+      const { requirement_id: req, scenario_id: sid, test_id: tid } = r.target;
+      if (req && c1 && !reqIds.has(req)) fail(`C4 ${r.rec_id} targets unknown ${req}`);
+      if (sid && c2 && !scn.has(sid)) fail(`C4 ${r.rec_id} targets unknown ${sid}`);
+      if (tid && c3 && !testById.has(tid)) fail(`C4 ${r.rec_id} targets unknown ${tid}`);
+      if (sid && req && scn.get(sid) && scn.get(sid).requirement_id !== req) fail(`C4 ${r.rec_id}: ${sid} does not belong to ${req}`);
+      if (tid && sid && testById.get(tid) && testById.get(tid).scenario_id !== sid) fail(`C4 ${r.rec_id}: ${tid} does not belong to ${sid}`);
+    }
+    done('C4 summary, survivors, requirements and recommendations checked');
+  }
+
   start();
   if (sm && c1) {
     for (const sub of sm.subjects) for (const id of sub.requirement_ids) if (!reqIds.has(id)) fail(`subject ${sub.subject_id} lists ${id} which C1 did not produce`);
