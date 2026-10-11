@@ -21,6 +21,7 @@ Frozen interfaces between C1 → C2 → C3 → C4 (J26-SE-331).
 - In every `.feature` scenario, the single `@type:` tag equals `scenario_type` in the metadata, and `fully_verified: true` is never set when one of C2's checks is `fail` (including the optional `grounding` and `adversarial` checks; `skipped` is allowed).
 - Optional fields added in the SH-04 review: C1 `candidates[].scores.downstream` (C1 research only, C2 ignores it); C2 `verification.grounding` and `verification.adversarial`.
 - Every file carries the same `run_id`.
+- C4 `survivors` lists every `Survived` and `NoCoverage` mutant. `mutation_score` = (killed + timeout) / (killed + timeout + survived + no_coverage), as StrykerJS computes it; `mutation_score_filtered` removes the `equivalent` survivors from the bottom. Per requirement, `score` = killed / (killed + survived). Scores are rounded to 4 decimals.
 
 ## Golden example
 `fixtures/golden/example-registration/` is one complete, valid chain (requirement → scenarios → Jest tests → real StrykerJS result: 14 mutants, 13 killed, 1 survived).
