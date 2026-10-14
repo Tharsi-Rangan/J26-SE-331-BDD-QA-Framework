@@ -29,9 +29,21 @@ Copy `.env.example` to `.env` for model settings. Never commit `.env`.
 | C4-02 | StrykerJS 10 + Jest 29, `coverageAnalysis: perTest`, run in a temp work folder (`src/stryker.ts`) |
 | C4-03 | Input loader with schema checks (`src/loader.ts`); `c4 run` writes `c4/raw/mutation.json` |
 | C4-04 | Scores: overall, per module, per requirement (`src/scores.ts`) |
+| C4-05 | Equivalent-mutant filter with rules E1 and E2 (`src/equivalent.ts`); writes `c4/equivalent_mutants.json`. Spot-check log: `docs/equivalent-spot-check.md` |
+| C4-06 | Trace of each survivor to TST, SCN and REQ (`src/trace.ts`); `c4 run` writes `c4/adequacy_report.json` (`src/report.ts`) |
 
 On the golden example, `c4 run` gives 14 mutants, 13 killed, 1 survived (mutant 12), score 0.9286.
-This is the same as the golden `adequacy_report.json`.
+Mutant 12 traces to TST-EX-001-02-01 and TST-EX-001-02-06, SCN-EX-001-02 and REQ-EX-001.
+This is the same as the golden `adequacy_report.json`, and the report passes `validate.mjs`.
+
+## Equivalent-mutant rules
+
+C4 checks only `Survived` and `NoCoverage` mutants. A flagged mutant gets `equivalent: true` and leaves `mutation_score_filtered`.
+
+| Rule | A mutant is flagged when |
+|---|---|
+| E1-same-code | The mutated code has the same tokens as the original. Whitespace, comments and quote style do not count. |
+| E2-log-only | The change is only inside the arguments of `console.<method>(...)` or `debug(...)`, and those arguments have no assignment, `++`, `--` or call. |
 
 ## How the StrykerJS run works
 
@@ -41,5 +53,5 @@ This is the same as the golden `adequacy_report.json`.
 
 ## Next Planner tasks
 
-- C4-05 Equivalent-mutant filtering
-- C4-06 Traceability mapper for survivors (TST/SCN/REQ, many-to-many)
+- C4-07 Trace-signal modes: `coverage_only`, `embedding_assisted`, `full`
+- C4-08 Blind ground truth for the pilot survivor traces
