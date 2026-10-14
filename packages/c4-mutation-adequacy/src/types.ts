@@ -9,6 +9,7 @@ export interface ManifestTest {
 }
 
 export interface TestManifest {
+  schema_version: string;
   run_id: string;
   subject_id: string;
   runner: { name: 'jest'; version?: string; config_path: string; test_root?: string };
