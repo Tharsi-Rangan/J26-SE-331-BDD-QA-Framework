@@ -58,7 +58,7 @@ export interface StrykerMutant {
 
 /** StrykerJS mutation-testing-report-schema, only the fields C4 uses. */
 export interface MutationReport {
-  files: Record<string, { mutants: StrykerMutant[] }>;
+  files: Record<string, { source?: string; mutants: StrykerMutant[] }>;
   testFiles?: Record<string, { tests: { id: string; name: string }[] }>;
   framework?: { name: string; version: string };
 }
