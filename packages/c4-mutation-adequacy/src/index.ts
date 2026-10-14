@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { RunOptions } from './args.js';
+import { findEquivalentMutants } from './equivalent.js';
 import { loadInputs } from './loader.js';
 import { buildReport, writeReport, type AdequacyReport } from './report.js';
 import { aggregateScores, type Scores } from './scores.js';
@@ -8,6 +9,7 @@ import { runStryker } from './stryker.js';
 import { buildSurvivors, testsByStrykerId, unmatchedTestNames, type Survivor } from './trace.js';
 
 export type { RunOptions } from './args.js';
+export { findEquivalentMutants } from './equivalent.js';
 export { loadInputs } from './loader.js';
 export { buildReport, writeReport } from './report.js';
 export { aggregateScores } from './scores.js';
@@ -16,7 +18,8 @@ export { buildSurvivors, testsByStrykerId, traceMutant } from './trace.js';
 
 /**
  * Requirement-Traceable Mutation Adequacy Attribution.
- * Done so far: loader (C4-03), StrykerJS run (C4-02), scores (C4-04) and traces (C4-06).
+ * Done so far: loader (C4-03), StrykerJS run (C4-02), scores (C4-04), equivalent filter (C4-05)
+ * and traces (C4-06).
  */
 export async function run(options: RunOptions): Promise<AdequacyReport> {
   if (!options.in) throw new Error('Missing --in <run folder>');
@@ -35,8 +38,16 @@ export async function run(options: RunOptions): Promise<AdequacyReport> {
   for (const name of unmatchedTestNames(mutation, tests))
     console.warn(`[c4] warning: no manifest test has jest_full_name "${name}"`);
 
-  const scores = aggregateScores(mutation, tests, inputs.subject.requirement_ids);
-  const survivors = buildSurvivors(mutation, testsByStrykerId(mutation, tests));
+  const equivalent = findEquivalentMutants(mutation);
+  const equivalentFile = path.join(options.out, 'c4', 'equivalent_mutants.json');
+  fs.writeFileSync(equivalentFile, JSON.stringify(equivalent, null, 2) + '\n');
+  for (const e of equivalent)
+    console.log(`[c4]   equivalent: mutant ${e.mutant_id} (${e.rule}) ${e.reason}`);
+  console.log(`[c4] ${equivalent.length} likely equivalent mutants; wrote ${equivalentFile}`);
+
+  const equivalentIds = new Set(equivalent.map((e) => e.mutant_id));
+  const scores = aggregateScores(mutation, tests, inputs.subject.requirement_ids, equivalentIds);
+  const survivors = buildSurvivors(mutation, testsByStrykerId(mutation, tests), equivalentIds);
   printScores(scores);
   printSurvivors(survivors);
 
@@ -49,7 +60,7 @@ function printScores({ summary: s, modules, requirements }: Scores): void {
   console.log(
     `[c4] mutants ${s.mutants_total}: killed ${s.killed}, survived ${s.survived}, no coverage ${s.no_coverage}, timeout ${s.timeout}`,
   );
-  console.log(`[c4] mutation score ${s.mutation_score}`);
+  console.log(`[c4] mutation score ${s.mutation_score} (filtered ${s.mutation_score_filtered})`);
   for (const m of modules) console.log(`[c4]   module ${m.file}: ${m.mutation_score}`);
   for (const r of requirements)
     console.log(
