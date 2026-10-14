@@ -9,6 +9,7 @@ export interface ManifestTest {
 }
 
 export interface TestManifest {
+  schema_version: string;
   run_id: string;
   subject_id: string;
   runner: { name: 'jest'; version?: string; config_path: string; test_root?: string };
@@ -57,7 +58,7 @@ export interface StrykerMutant {
 
 /** StrykerJS mutation-testing-report-schema, only the fields C4 uses. */
 export interface MutationReport {
-  files: Record<string, { mutants: StrykerMutant[] }>;
+  files: Record<string, { source?: string; mutants: StrykerMutant[] }>;
   testFiles?: Record<string, { tests: { id: string; name: string }[] }>;
   framework?: { name: string; version: string };
 }

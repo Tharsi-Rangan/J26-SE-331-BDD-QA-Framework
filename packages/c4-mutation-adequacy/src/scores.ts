@@ -1,3 +1,4 @@
+import { testsByStrykerId, traceMutant } from './trace.js';
 import type { ManifestTest, MutationReport, StrykerMutant } from './types.js';
 
 // Score formulas are fixed in packages/contracts/README.md ("Key rules"). Keep them in step.
@@ -64,22 +65,6 @@ export function mutationScore(c: Counts, equivalent = 0): number {
   return valid > 0 ? round4(detected / valid) : 0;
 }
 
-/** Map StrykerJS test id -> manifest test, joined on the exact Jest full name. */
-export function testsByStrykerId(
-  report: MutationReport,
-  tests: ManifestTest[],
-): Map<string, ManifestTest> {
-  const byName = new Map(tests.map((t) => [t.jest_full_name, t]));
-  const out = new Map<string, ManifestTest>();
-  for (const file of Object.values(report.testFiles ?? {})) {
-    for (const t of file.tests) {
-      const m = byName.get(t.name);
-      if (m) out.set(t.id, m);
-    }
-  }
-  return out;
-}
-
 export function requirementStatus(
   r: Pick<RequirementScore, 'mutants_traced' | 'killed' | 'survived'>,
 ): RequirementStatus {
@@ -116,12 +101,7 @@ export function aggregateScores(
   const perReq = new Map<string, StrykerMutant[]>(requirementIds.map((id) => [id, []]));
   for (const t of tests) if (!perReq.has(t.requirement_id)) perReq.set(t.requirement_id, []);
   for (const m of mutants) {
-    const reqs = new Set(
-      [...(m.coveredBy ?? []), ...(m.killedBy ?? [])]
-        .map((id) => byId.get(id)?.requirement_id)
-        .filter((r): r is string => !!r),
-    );
-    for (const r of reqs) perReq.get(r)!.push(m);
+    for (const r of traceMutant(m, byId).requirement_ids) perReq.get(r)!.push(m);
   }
   const requirements = [...perReq.entries()].map(([requirement_id, ms]) => {
     const killed = ms.filter((m) => m.status === 'Killed' || m.status === 'Timeout').length;
