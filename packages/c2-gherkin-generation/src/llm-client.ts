@@ -26,7 +26,7 @@ export async function generateWithLlm(
     options.baseUrl ?? process.env.LLM_BASE_URL;
   const model =
     options.model ?? process.env.LLM_MODEL;
-  const timeoutMs = options.timeoutMs ?? 60_000;
+  const timeoutMs = options.timeoutMs ?? 180_000;
 
   if (!baseUrl) {
     throw new Error('Missing LLM_BASE_URL configuration');
