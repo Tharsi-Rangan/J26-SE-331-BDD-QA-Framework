@@ -1,3 +1,4 @@
+import { testsByStrykerId } from './trace.js';
 import type { ManifestTest, MutationReport, StrykerMutant } from './types.js';
 
 // Score formulas are fixed in packages/contracts/README.md ("Key rules"). Keep them in step.
@@ -62,22 +63,6 @@ export function mutationScore(c: Counts, equivalent = 0): number {
   const detected = c.killed + c.timeout;
   const valid = detected + c.survived + c.no_coverage - equivalent;
   return valid > 0 ? round4(detected / valid) : 0;
-}
-
-/** Map StrykerJS test id -> manifest test, joined on the exact Jest full name. */
-export function testsByStrykerId(
-  report: MutationReport,
-  tests: ManifestTest[],
-): Map<string, ManifestTest> {
-  const byName = new Map(tests.map((t) => [t.jest_full_name, t]));
-  const out = new Map<string, ManifestTest>();
-  for (const file of Object.values(report.testFiles ?? {})) {
-    for (const t of file.tests) {
-      const m = byName.get(t.name);
-      if (m) out.set(t.id, m);
-    }
-  }
-  return out;
 }
 
 export function requirementStatus(

@@ -1,13 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
-import {
-  aggregateScores,
-  countMutants,
-  mutationScore,
-  requirementStatus,
-  testsByStrykerId,
-} from '../src/scores.js';
+import { aggregateScores, countMutants, mutationScore, requirementStatus } from '../src/scores.js';
+import { testsByStrykerId } from '../src/trace.js';
 import type { MutationReport, StrykerMutant, TestManifest } from '../src/types.js';
 
 const golden = path.resolve(
