@@ -148,3 +148,52 @@ def test_supported_status_without_traceable_evidence_requires_review():
     result = classify_tier([], _grounding(evidence=False), _consistency())
     assert result["tier"] == TIER_2
     assert result["analysis_status"] == "needs_review"
+
+
+def test_semantic_rewrite_requires_explicit_human_review():
+    options = {
+        "original_text": "The system shall respond quickly.",
+        "candidate_text": "The system shall respond within 2 seconds.",
+    }
+    unreviewed = classify_tier([], _grounding(), _consistency(), **options)
+    reviewed = classify_tier(
+        [], _grounding(), _consistency(), human_reviewed=True, **options,
+    )
+    assert unreviewed["tier"] == TIER_2
+    assert any(r["kind"] == "candidate_changes_requirement_content" for r in unreviewed["reasons"])
+    assert reviewed["tier"] == TIER_1
+    assert reviewed["reasons"][0]["kind"] == "reviewed_current_rewrite"
+
+
+def test_unresolved_clarification_blocks_reviewed_rewrite_promotion():
+    result = classify_tier(
+        [], _grounding(), _consistency(),
+        original_text="The system shall respond quickly.",
+        candidate_text="The system shall respond within 2 seconds.",
+        human_reviewed=True, unresolved_clarification=True,
+    )
+    assert result["tier"] == TIER_2
+    assert any(r["kind"] == "clarification_unresolved" for r in result["reasons"])
+
+
+def test_human_review_does_not_override_independent_analysis_gates():
+    options = {
+        "original_text": "The system shall respond quickly.",
+        "candidate_text": "The system shall respond within 2 seconds.",
+        "human_reviewed": True,
+    }
+    quality = classify_tier(
+        [{"type": "ambiguous", "explanation": "Open interpretation."}],
+        _grounding(), _consistency(), **options,
+    )
+    unsupported = classify_tier([], _grounding("unsupported", evidence=False), _consistency(), **options)
+    conflict = classify_tier(
+        [], _grounding(), _consistency("conflict", check="fail"),
+        unresolved_clarification=True, **options,
+    )
+    assert quality["tier"] == TIER_2
+    assert any(r["kind"] == "quality_defect" for r in quality["reasons"])
+    assert unsupported["tier"] == TIER_2
+    assert any(r["kind"] == "grounding_insufficient" for r in unsupported["reasons"])
+    assert conflict["tier"] == TIER_3
+    assert conflict["reasons"][0]["kind"] == "confirmed_requirement_conflict"
