@@ -12,6 +12,7 @@ from c1_requirement_quality.refinement import (
     process_refinement_actions,
     stable_candidate_id,
 )
+from c1_requirement_quality.source_integrity import seal_source, snapshot_source
 
 REQ_ID = "REQ-EX-201"
 ORIGINAL = "The system shall respond quickly."
@@ -384,6 +385,8 @@ def test_cli_refine_validates_schema_writes_sidecar_and_never_overwrites(tmp_pat
     input_path.write_text(json.dumps(_artifact()), encoding="utf-8")
     srs = tmp_path / "sample.md"
     srs.write_text(SRS_TEXT, encoding="utf-8")
+    _, manifest = snapshot_source(input_path.parent, srs, "DOC-EXAMPLE")
+    seal_source(input_path.parent, manifest)
     actions = tmp_path / "actions.json"
     actions.write_text(json.dumps({"requirements": [{
         "requirement_id": REQ_ID,
