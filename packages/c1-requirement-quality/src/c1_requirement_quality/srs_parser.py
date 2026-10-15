@@ -15,41 +15,12 @@ NUMBERED_REQUIREMENT_PATTERN = re.compile(
 )
 
 
+from c1_requirement_quality.ingest import extract_srs_requirements
+
+
 def extract_requirements(path: Path) -> list[dict[str, object]]:
     """Extract requirement text and source locations without assigning IDs."""
-    content = path.read_text(encoding="utf-8-sig")
-    requirements: list[dict[str, object]] = []
-    section = "Unspecified"
-    seen_numbers: set[str] = set()
-
-    for line_number, line in enumerate(content.splitlines(), start=1):
-        heading = HEADING_PATTERN.match(line)
-        if heading:
-            section = heading.group(1).strip()
-            continue
-
-        match = NUMBERED_REQUIREMENT_PATTERN.match(line)
-        if not match:
-            continue
-
-        source_number = match.group("number")
-        text = match.group("text").strip()
-
-        if source_number in seen_numbers:
-            raise ValueError(
-                f"Duplicate requirement number {source_number} "
-                f"at line {line_number}"
-            )
-
-        seen_numbers.add(source_number)
-        requirements.append(
-            {
-                "source": {"section": section, "line": line_number},
-                "original_text": text,
-            }
-        )
-
-    return requirements
+    return extract_srs_requirements(path)
 
 
 def parse_srs(path: Path, project_code: str) -> list[dict[str, object]]:

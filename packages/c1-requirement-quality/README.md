@@ -20,21 +20,42 @@ pip install -e ".[dev]"
 ## Run and test
 
 ```
-c1 run --srs <file> --out runs/<RUN-DIRECTORY> --run-id <RUN-ID>
+c1 run --srs <file> --out runs/<RUN-DIRECTORY> --run-id <RUN-ID> --registry <registry.json>
 pytest
 ```
 
 ### Requirement registry selection
 
-Until the team confirms which existing C1 registry history is authoritative,
-pass `--registry <path>` explicitly when running `c1 run`. The default
-`.c1-state/requirement-registry.json` is relative to the process working
-directory, and the repository currently contains two incompatible histories
-at the repository root and in this package. They both contain retired IDs
-`REQ-EX-001` through `REQ-EX-079`, while `REQ-EX-080` is active in the root
-registry and retired in the package registry. Do not merge, replace, or select
-one history based only on its location; resolve ownership and continuity with
-the team first. Tests should continue to pass a temporary registry path.
+Pass `--registry <path>` explicitly. C1 does not choose a historical default.
+The root legacy registry has active `REQ-EX-080`, next number 81 and 79 retired
+IDs; the package legacy registry has active `REQ-EX-155`, next number 156 and
+154 retired IDs. Neither history has been declared authoritative. Both remain
+unchanged and read-only to the new registry implementation. Do not merge them
+or reprocess against them implicitly. Tests use isolated new registries.
+
+New registries scope active IDs by logical document identity and allocate IDs
+across the project. An exact section-hierarchy/text pair keeps its ID through
+insertion, renumbering, reordering and duplicates added in other sections.
+Identical text within the same hierarchy is indistinguishable and is rejected
+before state publication; give the occurrences distinct source sections.
+Changing text or its hierarchy creates a new identity and retires the old ID
+only in that document. Another document cannot retire its IDs.
+
+By default a document identity hashes its resolved source location, while the
+source version hashes its bytes. Use `--document-id <stable-logical-id>` on
+every version when continuity must survive renaming/moving the source. Separate
+files with the same basename at different locations are separate documents.
+Reusing an explicit document ID declares the files to be versions of that same
+logical document; choose these IDs deliberately within a project registry.
+
+An approved legacy migration can use `RequirementRegistry.export_legacy` with
+an explicit mapping from every old active key to `(context, exact_text)` and a
+logical document ID. It writes a **new** file, retains every ID, retirement and
+allocator high-water mark, and never changes or merges the original histories.
+For CLI compatibility, context is the JSON encoding of the NIR requirement's
+`section_hierarchy`, e.g. `json.dumps(["Requirements"], ensure_ascii=False)`.
+No historical migration has been executed. The team must choose an owner,
+history, document bindings and destination before doing so.
 
 Validate your output against the shared contract (from the repo root):
 

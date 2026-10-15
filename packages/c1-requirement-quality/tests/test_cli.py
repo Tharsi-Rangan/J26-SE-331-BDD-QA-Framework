@@ -206,7 +206,7 @@ def test_validated_output_has_contract_fields_and_pending_analysis(tmp_path):
     assert output["source_document"] == {
         "name": "sample.md",
         "project_code": "EX",
-        "path": "sample.md",
+        "path": "c1/internal/source/sample.md",
         "redaction_applied": False,
     }
     requirement = output["requirements"][0]

@@ -7,16 +7,20 @@ import argparse
 import json
 import re
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 from c1_requirement_quality.grounding_analyser import analyse_grounding
 from c1_requirement_quality.quality_analyser import analyse_requirements
+
 from c1_requirement_quality.consistency_analyser import analyse_consistency, consistency_for_requirement
 from c1_requirement_quality.requirement_registry import RequirementRegistry
+from c1_requirement_quality.source_integrity import (
+    document_identity, snapshot_source, seal_source, verify_source, copy_source_bundle,
+)
 from c1_requirement_quality.refinement import process_refinement_actions
 from c1_requirement_quality.severity_priority import assess_defects
-from c1_requirement_quality.srs_parser import extract_requirements
 from c1_requirement_quality.tier_classifier import classify_tier
 from c1_requirement_quality.rag.rag_grounding_analyser import RAGGroundingAnalyser
 from c1_requirement_quality.rag.verifier import FactVerifier, LocalNLI
@@ -48,9 +52,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="grounding implementation (default: lexical baseline)",
     )
     run_parser.add_argument("--project-code", default="EX", help="requirement ID prefix")
+    run_parser.add_argument("--document-id", help="logical document identity; use consistently across source renames/moves")
     run_parser.add_argument(
         "--registry",
-        help="persistent registry file; defaults to .c1-state/requirement-registry.json",
+        help="explicit document-scoped registry file; historical defaults are never selected implicitly",
     )
 
     refine_parser = sub.add_parser(
@@ -61,6 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
     refine_parser.add_argument("--srs", required=True, help="source SRS used for lexical grounding")
     refine_parser.add_argument("--actions", required=True, help="JSON file with candidate and decision actions")
     refine_parser.add_argument("--out", required=True, help="new output folder; must not already exist")
+
     return parser
 
 
@@ -92,32 +98,37 @@ def refine_run(input_path: Path, srs: Path, actions_path: Path, out: Path) -> No
     artifact = json.loads(input_path.read_text(encoding="utf-8-sig"))
     actions = json.loads(actions_path.read_text(encoding="utf-8-sig"))
     _validate_contract_artifact(artifact)
-    source_document = artifact.get("source_document", {})
-    if not isinstance(source_document, dict) or source_document.get("name") != srs.name:
-        raise ValueError("SRS filename does not match the validated artifact source_document.name")
-    srs_text = srs.read_text(encoding="utf-8-sig")
+    srs_text, manifest = verify_source(input_path, srs)
     refined, diagnostics = process_refinement_actions(artifact, actions, srs_text)
     _validate_contract_artifact(refined)
 
-    c1_dir = out / "c1"
-    c1_dir.mkdir(parents=True, exist_ok=False)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".c1-refine-pending-", dir=out.parent))
+    c1_dir = staging / "c1"
+    c1_dir.mkdir()
     (c1_dir / "validated_requirements.json").write_text(
         json.dumps(refined, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
     (c1_dir / "refinement_diagnostics.json").write_text(
         json.dumps(diagnostics, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
+    copy_source_bundle(input_path, c1_dir, manifest)
+    _validate_contract_artifact(json.loads((c1_dir / "validated_requirements.json").read_text(encoding="utf-8")))
+    verify_source(c1_dir / "validated_requirements.json", srs)
+    staging.rename(out)
+    c1_dir = out / "c1"
     print(f"[c1] wrote refined requirements to {c1_dir / 'validated_requirements.json'}")
     print(f"[c1] wrote refinement diagnostics to {c1_dir / 'refinement_diagnostics.json'}")
 
 
-def run(
+def _run_staged(
     srs: Path,
     out: Path,
     run_id: str,
     project_code: str = "EX",
-    registry_path: Path | None = None,
+    registry: RequirementRegistry | None = None,
     grounding_mode: str = "lexical",
+    document_id: str | None = None,
 ) -> None:
     """Parse an SRS, run quality and grounding analysis, and write contract-compliant artifacts.
 
@@ -125,8 +136,7 @@ def run(
     Stage B: populate defects and validation.checks.quality using quality_analyser.
     Stage C: populate grounding and validation.checks.grounding using grounding_analyser.
 
-    Tier assignment is not yet wired; those decisions are pending Planner
-    confirmation and are implemented in a later task.
+    All output and registry assignments remain staged until validated.
     """
     if not srs.is_file():
         raise FileNotFoundError(f"SRS file not found: {srs}")
@@ -135,29 +145,33 @@ def run(
     if grounding_mode not in {"lexical", "rag"}:
         raise ValueError("grounding_mode must be 'lexical' or 'rag'")
 
-    # Match extract_requirements(), which uses utf-8-sig so a UTF-8 BOM is
-    # treated as an encoding marker rather than part of the first SRS claim.
-    srs_text = srs.read_text(encoding="utf-8-sig")
-    extracted = extract_requirements(srs)
+    # Extract normalized full text and requirements from any supported SRS format
+    c1_dir = out / "c1"
+    c1_dir.mkdir()
+    doc, manifest = snapshot_source(c1_dir, srs, document_identity(srs, document_id))
+    srs_text = doc.raw_text
+    extracted = [req.to_legacy_item() for req in doc.requirements]
     if not extracted:
         raise ValueError("SRS contains no requirements; no C1 artifact was generated")
 
-    if registry_path is None:
-        registry_path = Path(".c1-state") / "requirement-registry.json"
-
-    registry = RequirementRegistry(registry_path, project_code)
+    assert registry is not None
     texts = [str(item["original_text"]) for item in extracted]
-    requirement_ids = registry.assign_ids(texts)
+    # Use logical section breadcrumbs, not page/line coordinates that shift on insertion.
+    contexts = [json.dumps(req.section_hierarchy, ensure_ascii=False) for req in doc.requirements]
+    requirement_ids = registry.assign_ids(texts, contexts=contexts,
+                                         document_id=manifest["document_id"], persist=False)
 
     requirements: list[dict[str, object]] = []
     for item, requirement_id in zip(extracted, requirement_ids, strict=True):
-        requirements.append(
-            {
-                "requirement_id": requirement_id,
-                "source": item["source"],
-                "original_text": item["original_text"],
-            }
-        )
+        req_entry: dict[str, object] = {
+            "requirement_id": requirement_id,
+            "source": item["source"],
+            "original_text": item["original_text"],
+        }
+        for extra_key in ("doc_item_number", "section_hierarchy", "page", "table_id"):
+            if extra_key in item and item[extra_key] is not None:
+                req_entry[extra_key] = item[extra_key]
+        requirements.append(req_entry)
 
     # Stage B: run deterministic lexical quality analysis.
     # analyse_requirements preserves input order and is independent per requirement.
@@ -242,6 +256,26 @@ def run(
         encoding="utf-8",
     )
 
+    extraction_diag_path = c1_dir / "extraction_diagnostics.json"
+    extraction_diag = {
+        "source_document": srs.name,
+        "format": doc.format,
+        "requirements_count": len(doc.requirements),
+        "context_items_count": len(doc.context_items),
+        "uncertain_items_count": len(doc.uncertain_items),
+        "tables_count": len(doc.tables),
+        "warnings": [w.to_dict() for w in doc.warnings],
+        "context_summary": {
+            sub_cat: sum(1 for c in doc.context_items if c.sub_category == sub_cat)
+            for sub_cat in sorted(set(c.sub_category for c in doc.context_items if c.sub_category))
+        },
+        "uncertain_items": [u.to_legacy_item() for u in doc.uncertain_items],
+    }
+    extraction_diag_path.write_text(
+        json.dumps(extraction_diag, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
     validated_req_items: list[dict[str, object]] = []
     for requirement, findings, grounding_res in zip(
         requirements, quality_findings, grounding_results, strict=True
@@ -260,7 +294,9 @@ def run(
 
         validated_req_items.append(
             {
-                **requirement,
+                "requirement_id": str(requirement["requirement_id"]),
+                "source": requirement["source"],
+                "original_text": str(requirement["original_text"]),
                 "defects": findings,
                 "tier": tier["tier"],
                 "grounding": {
@@ -308,19 +344,58 @@ def run(
         "source_document": {
             "name": srs.name,
             "project_code": project_code,
-            "path": srs.name,
+            "path": f"c1/internal/source/{srs.name}",
             "redaction_applied": False,
         },
         "requirements": validated_req_items,
     }
     validated_output_path = c1_dir / "validated_requirements.json"
+    _validate_contract_artifact(validated_requirements)
     validated_output_path.write_text(
         json.dumps(validated_requirements, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
-    print(f"[c1] wrote {len(requirements)} requirements to {output_path}")
-    print(f"[c1] wrote validated requirements to {validated_output_path}")
-    print(f"[c1] registry: {registry_path}")
+    seal_source(c1_dir, manifest)
+
+
+def run(srs: Path, out: Path, run_id: str, project_code: str = "EX",
+        registry_path: Path | None = None, grounding_mode: str = "lexical",
+        document_id: str | None = None) -> None:
+    """Validate a staged run before publishing artifacts, then commit registry last.
+
+    Failed staging directories are retained for inspection. No existing run is
+    overwritten. A failed registry commit moves outputs back to staging.
+    """
+    if registry_path is None:
+        raise ValueError("Pass --registry explicitly; historical default registry ownership is unresolved")
+    registry = RequirementRegistry(registry_path, project_code)
+    registry.assert_writable()
+    target = out / "c1"
+    if target.exists():
+        raise FileExistsError(f"C1 output already exists: {target}")
+    if registry.path.resolve().is_relative_to(target.resolve()):
+        raise ValueError("Registry must be outside the published C1 artifact directory")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".c1-run-pending-", dir=out.parent))
+    try:
+        _run_staged(srs, staging, run_id, project_code, registry, grounding_mode, document_id)
+        staged = staging / "c1"
+        _validate_contract_artifact(json.loads((staged / "validated_requirements.json").read_text(encoding="utf-8")))
+        verify_source(staged / "validated_requirements.json", srs)
+        with registry.publication_lock():
+            if target.exists():
+                raise FileExistsError(f"C1 output already exists: {target}")
+            out.mkdir(parents=True, exist_ok=True)
+            staged.rename(target)
+            try:
+                registry._commit_locked()
+            except Exception:
+                target.rename(staged)
+                raise
+    except Exception as err:
+        raise RuntimeError(f"C1 run not published; staging retained at {staging}: {err}") from err
+    print(f"[c1] wrote validated requirements to {target / 'validated_requirements.json'}")
+    print(f"[c1] registry: {registry.path}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -338,6 +413,7 @@ def main(argv: list[str] | None = None) -> int:
             args.project_code,
             Path(args.registry) if args.registry else None,
             args.grounding_mode,
+            args.document_id,
         )
     except Exception as err:  # noqa: BLE001 - CLI boundary
         print(f"[c1] {err}", file=sys.stderr)
