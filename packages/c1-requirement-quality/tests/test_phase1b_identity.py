@@ -129,7 +129,7 @@ def test_hash_and_full_normalized_representation_preserved(tmp_path):
     assert "sha256" not in contract["source_document"]
 
 
-@pytest.mark.parametrize("command", ["refine"])
+@pytest.mark.parametrize("command", ["refine", "generate-candidates"])
 def test_changed_same_name_source_rejected_before_outputs(tmp_path, command):
     artifact, source = run_document(tmp_path)
     source.write_text("1. The system shall delete all accounts.\n")
