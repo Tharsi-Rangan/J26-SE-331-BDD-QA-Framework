@@ -439,3 +439,63 @@ def test_cli_refine_rejects_srs_with_different_source_filename(tmp_path):
         "--actions", str(actions), "--out", str(tmp_path / "out"),
     ]) == 1
     assert not (tmp_path / "out").exists()
+
+
+def test_custom_questions_survive_refinement_rounds():
+    text = "The system shall wait for [timeout]."
+    custom = "Who confirms the timeout?"
+    first, _ = process_refinement_actions(
+        _artifact(text),
+        {"requirements": [{"requirement_id": REQ_ID, "clarification_questions": [custom]}]},
+        text,
+    )
+    second, _ = process_refinement_actions(
+        first, {"requirements": [{"requirement_id": REQ_ID}]}, text,
+    )
+    assert _requirement(second)["clarification_questions"] == _requirement(first)["clarification_questions"]
+    third, _ = process_refinement_actions(
+        second,
+        {"requirements": [{"requirement_id": REQ_ID, "clarification_questions": [custom]}]},
+        text,
+    )
+    assert _requirement(third)["clarification_questions"] == [
+        "What value or rule should replace [timeout]?", custom,
+    ]
+
+
+def test_inherited_edited_and_not_required_decisions_survive_empty_rounds():
+    text = "The system shall send email."
+    candidate = "The system  shall send email."
+    first, _ = process_refinement_actions(
+        _artifact(text),
+        {"requirements": [{"requirement_id": REQ_ID, "human_decision": "edited", "edited_text": candidate}]},
+        text,
+    )
+    second, _ = process_refinement_actions(first, {"requirements": [{"requirement_id": REQ_ID}]}, text)
+    assert _requirement(second)["human_decision"] == "edited"
+    assert _requirement(second)["final_text"] == candidate
+    third, _ = process_refinement_actions(
+        second,
+        {"requirements": [{"requirement_id": REQ_ID, "human_decision": "not_required"}]},
+        text,
+    )
+    fourth, _ = process_refinement_actions(third, {"requirements": [{"requirement_id": REQ_ID}]}, text)
+    assert _requirement(fourth)["human_decision"] == "not_required"
+
+
+@pytest.mark.parametrize("field", ["selected_candidate_text", "edited_text"])
+def test_new_candidate_does_not_inherit_edited_approval(field):
+    text = "The system shall send email."
+    first, _ = process_refinement_actions(
+        _artifact(text),
+        {"requirements": [{"requirement_id": REQ_ID, "human_decision": "edited",
+                           "edited_text": "The system  shall send email."}]},
+        text,
+    )
+    second, _ = process_refinement_actions(
+        first,
+        {"requirements": [{"requirement_id": REQ_ID, field: "The system shall record events."}]},
+        text,
+    )
+    assert _requirement(second)["human_decision"] == "pending"
+    assert _requirement(second)["final_text"] == text

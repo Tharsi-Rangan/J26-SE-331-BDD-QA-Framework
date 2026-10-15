@@ -263,6 +263,7 @@ def process_refinement_actions(
 
         questions = list(dict.fromkeys(
             clarification_questions_for(original_text)
+            + _require_text_list(requirement.get("clarification_questions", []), "existing clarification_questions")
             + _require_text_list(action.get("clarification_questions", []), "clarification_questions")
         ))
         answers = _validate_answers(action.get("clarification_answers", []), questions)
@@ -278,15 +279,23 @@ def process_refinement_actions(
         decision = action.get("human_decision", requirement.get("human_decision", "pending"))
         if decision not in DECISIONS:
             raise ValueError(f"invalid human_decision: {decision}")
+        if not explicit_decision and (
+            action.get("selected_candidate_id", previous_selected_id) != previous_selected_id
+            or "selected_candidate_text" in action and action["selected_candidate_text"] != _candidate_index(requirement).get(previous_selected_id)
+            or "edited_text" in action and action["edited_text"] != _candidate_index(requirement).get(previous_selected_id)
+        ):
+            decision = "pending"
 
         edited_text = action.get("edited_text")
         if decision == "edited":
+            if not explicit_decision and edited_text is None:
+                edited_text = _candidate_index(requirement).get(previous_selected_id)
             if not isinstance(edited_text, str) or not edited_text.strip():
                 raise ValueError("edited decision requires non-empty edited_text")
             selected_id = _add_candidate(requirement_id, original_text, candidates, edited_text)
         else:
             selected_id = action.get("selected_candidate_id", requirement.get("selected_candidate_id"))
-            selected_text = action.get("selected_candidate_text")
+            selected_text = action.get("selected_candidate_text", action.get("edited_text"))
             if selected_text is not None:
                 if not isinstance(selected_text, str) or not selected_text.strip():
                     raise ValueError("selected_candidate_text must not be empty")
@@ -303,7 +312,7 @@ def process_refinement_actions(
             decision = "pending"
         if decision == "approved" and selected_id is None:
             raise ValueError("approved decision requires a selected candidate")
-        if decision == "not_required" and "human_decision" not in action:
+        if decision == "not_required" and "human_decision" not in action and requirement.get("human_decision") != "not_required":
             raise ValueError("not_required must be explicitly supplied by a human action")
 
         candidate_diagnostics = []
