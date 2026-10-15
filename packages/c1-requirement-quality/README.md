@@ -57,6 +57,36 @@ For CLI compatibility, context is the JSON encoding of the NIR requirement's
 No historical migration has been executed. The team must choose an owner,
 history, document bindings and destination before doing so.
 
+### Source integrity and publication (Phase 1B.1)
+
+Each new run stores read-only original bytes in `c1/internal/source/<filename>`,
+the complete NIR in `c1/internal/normalized_ingestion.json`, and identity/hash/
+format/original-location metadata in `c1/internal/source_manifest.json`.
+The manifest hashes original bytes, normalized data and the validated artifact.
+The frozen contract contains no new internal fields; its existing
+`source_document.path` points to the archived source relative to the run folder.
+
+Both `refine` and `generate-candidates` require this bundle and verify the input
+artifact, archive, normalized data and supplied SRS bytes before using evidence.
+Same-name changed content is rejected. Renamed but byte-identical supplied
+files are accepted. Refinement copies the original source/NIR unchanged into
+its new output and binds a new manifest to the new artifact. Legacy artifacts
+without a manifest fail closed: they require an explicitly verified reprocessing
+run, not filename-only fallback or an inferred hash.
+
+Runs require a fresh `c1` directory, stage output in a sibling
+`.c1-run-pending-*` folder and validate before publishing. Registry allocation
+stays in memory until publication; the registry is committed last under an
+exclusive lock and stale snapshots are rejected. If registry publication fails,
+the C1 directory is moved back to staging and the registry is unchanged.
+Failed staging files are retained for inspection, never used as final output.
+Refinement also stages before publishing. Candidate sidecars refuse overwrites.
+After a process crash, leftover locks/staging need explicit inspection; there is
+no automatic recovery/resumption implementation in Phase 1B.1. Read-only files
+and hashes detect accidental alteration, not coordinated tampering by a user
+who can replace the entire bundle. Filesystem crash-atomicity across the run
+directory and registry is not claimed.
+
 ### Human clarification history (Phase 1B.2)
 
 New runs also write `c1/internal/workflow_snapshot.json`, with its SHA256 bound
