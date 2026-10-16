@@ -4,6 +4,10 @@ import path from 'node:path';
 import type { RunOptions } from './args.js';
 import { generateWithLlm } from './llm-client.js';
 import { validateGherkin } from './gherkin-validator.js';
+import {
+  writeValidationReport,
+  type FeatureValidationEntry,
+} from './validation-report.js';
 
 export type { RunOptions } from './args.js';
 
@@ -62,7 +66,9 @@ function parseFeatureName(feature: string, requirementId: string): string {
   const match = feature.match(/^\s*Feature:\s*(.+)$/m);
 
   if (!match) {
-    throw new Error(`LLM output for ${requirementId} has no Feature declaration`);
+    throw new Error(
+      `LLM output for ${requirementId} has no Feature declaration`,
+    );
   }
 
   return match[1].trim();
@@ -71,6 +77,7 @@ function parseFeatureName(feature: string, requirementId: string): string {
 export async function run(options: RunOptions): Promise<void> {
   const inputDir = options.in ?? options.out;
   const input = readRequirements(inputDir);
+
   const readyRequirements = input.requirements.filter(
     (requirement) => requirement.bdd_ready,
   );
@@ -80,13 +87,17 @@ export async function run(options: RunOptions): Promise<void> {
   }
 
   const model = process.env.LLM_MODEL;
+
   if (!model) {
     throw new Error('Missing LLM_MODEL configuration');
   }
 
   const c2Dir = path.join(options.out, 'c2');
   const featuresDir = path.join(c2Dir, 'features');
+
   fs.mkdirSync(featuresDir, { recursive: true });
+
+  const validationResults: FeatureValidationEntry[] = [];
 
   const metadata = {
     contract: 'c2.scenario-metadata',
@@ -110,7 +121,6 @@ export async function run(options: RunOptions): Promise<void> {
   };
 
   for (const requirement of readyRequirements) {
-
     const prompt = [
       `Generate a single Gherkin feature for requirement ${requirement.requirement_id}.`,
       'Use only the requirement text provided below. Do not invent business rules.',
@@ -142,33 +152,91 @@ export async function run(options: RunOptions): Promise<void> {
       `Requirement text: ${requirement.final_text}`,
     ].join('\n');
 
-
     const rawFeature = await generateWithLlm([
       {
         role: 'system',
         content: 'You generate conservative, traceable Gherkin acceptance scenarios.',
       },
-      { role: 'user', content: prompt },
+      {
+        role: 'user',
+        content: prompt,
+      },
     ]);
 
     const feature = stripMarkdownFence(rawFeature);
+    const featureRelativePath =
+      `c2/features/${requirement.requirement_id}.feature`;
 
     const validation = validateGherkin(feature);
+
+    validationResults.push({
+      requirement_id: requirement.requirement_id,
+      feature_file: featureRelativePath,
+      valid: validation.valid,
+      ...(!validation.valid
+        ? {
+            error:
+              validation.error ?? 'Unknown Gherkin parsing error',
+          }
+        : {}),
+    });
+
     if (!validation.valid) {
-      throw new Error(
-        `Invalid Gherkin for ${requirement.requirement_id}: ${validation.error}`,
+      console.error(
+        `[c2] Invalid Gherkin for ${requirement.requirement_id}: ${
+          validation.error ?? 'Unknown parsing error'
+        }`,
       );
+
+      // Keep processing the remaining requirements.
+      continue;
     }
 
-    const featureName = parseFeatureName(feature, requirement.requirement_id);
+    const requirementTag = `@${requirement.requirement_id}`;
 
-    if (!feature.includes(`@${requirement.requirement_id}`)) {
+    if (!feature.includes(requirementTag)) {
       throw new Error(
         `LLM output for ${requirement.requirement_id} is missing its requirement tag`,
       );
     }
 
-    const featureRelativePath = `c2/features/${requirement.requirement_id}.feature`;
+    const featureName = parseFeatureName(
+      feature,
+      requirement.requirement_id,
+    );
+
+    const scenarioPattern =
+      /^\s*(@SCN-[A-Z0-9]+-[0-9]{3,4}-[0-9]{2})\s*\r?\n\s*(@type:(positive|negative|boundary|edge))\s*\r?\n\s*(Scenario(?: Outline)?:\s*(.+))$/gm;
+
+    const scenarios: Array<{
+      scenario_id: string;
+      scenario_type: string;
+      scenario_name: string;
+      is_outline: boolean;
+      line: number;
+    }> = [];
+
+    let match: RegExpExecArray | null;
+
+    while ((match = scenarioPattern.exec(feature)) !== null) {
+      scenarios.push({
+        scenario_id: match[1].slice(1),
+        scenario_type: match[3],
+        scenario_name: match[5].trim(),
+        is_outline: match[4].startsWith('Scenario Outline:'),
+        line: feature.slice(0, match.index).split('\n').length + 2,
+      });
+    }
+
+    if (scenarios.length === 0) {
+      console.warn(
+        `[c2] No correctly tagged scenarios found for ${requirement.requirement_id}.`,
+      );
+
+      // Do not create feature or scenario metadata for unusable output.
+      continue;
+    }
+
     const featureAbsolutePath = path.join(
       featuresDir,
       `${requirement.requirement_id}.feature`,
@@ -183,54 +251,42 @@ export async function run(options: RunOptions): Promise<void> {
       requirement_text_used: requirement.final_text,
     });
 
-    const scenarioPattern =
-      /^\s*(@SCN-[A-Z0-9]+-[0-9]{3,4}-[0-9]{2})\s*\r?\n\s*(@type:(positive|negative|boundary|edge))\s*\r?\n\s*(Scenario(?: Outline)?:\s*(.+))$/gm;
-
-    let match: RegExpExecArray | null;
-    let scenarioCount = 0;
-
-    while ((match = scenarioPattern.exec(feature)) !== null) {
-      scenarioCount += 1;
-      const scenarioTag = match[1];
-      const scenarioType = match[3];
-      const scenarioTitle = match[5].trim();
-      const scenarioId = scenarioTag.slice(1);
-      const isOutline = match[4].startsWith('Scenario Outline:');
-
+    for (const scenario of scenarios) {
       metadata.scenarios.push({
-        scenario_id: scenarioId,
+        scenario_id: scenario.scenario_id,
         requirement_id: requirement.requirement_id,
         feature_file: featureRelativePath,
-        scenario_name: scenarioTitle,
-        line: feature.slice(0, match.index).split('\n').length + 2,
-        scenario_type: scenarioType,
-        is_outline: isOutline,
+        scenario_name: scenario.scenario_name,
+        line: scenario.line,
+        scenario_type: scenario.scenario_type,
+        is_outline: scenario.is_outline,
         constraints: [],
         equivalence_partitions: [],
         boundary_values: [],
-        ...(isOutline ? { examples: [] } : {}),
+        ...(scenario.is_outline ? { examples: [] } : {}),
         generation: {
           mode: 'llm_only_baseline',
           regeneration_rounds: 0,
         },
         verification: {
-          syntax: 'skipped',
+          syntax: 'pass',
           requirement_consistency: { status: 'skipped' },
           ep_coverage: 'skipped',
           bva_coverage: 'skipped',
           completeness: 'skipped',
           fully_verified: false,
-          notes: 'Baseline generated; independent verification is still required.',
+          notes:
+            'Baseline generated; independent verification is still required.',
         },
       });
     }
-
-    if (scenarioCount === 0) {
-      throw new Error(
-        `LLM output for ${requirement.requirement_id} has no correctly tagged scenarios`,
-      );
-    }
   }
+
+  const reportPath = writeValidationReport(
+    c2Dir,
+    input.run_id,
+    validationResults,
+  );
 
   fs.writeFileSync(
     path.join(c2Dir, 'scenario_metadata.json'),
@@ -241,4 +297,14 @@ export async function run(options: RunOptions): Promise<void> {
   console.log(
     `[c2] Generated ${metadata.features.length} feature file(s) from ${readyRequirements.length} BDD-ready requirement(s).`,
   );
+
+  console.log(
+    `[c2] Syntax validation: ${
+      validationResults.filter((result) => result.valid).length
+    } valid, ${
+      validationResults.filter((result) => !result.valid).length
+    } invalid.`,
+  );
+
+  console.log(`[c2] Validation report: ${reportPath}`);
 }
