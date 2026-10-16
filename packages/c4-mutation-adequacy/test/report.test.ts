@@ -59,6 +59,23 @@ describe('c4 adequacy report', () => {
     expect(res.status).toBe(0);
   });
 
+  test('an embedding mode writes trace_signal and embedding_model in config', () => {
+    const { manifest } = loadInputs(golden);
+    const r = buildReport(
+      loadInputs(golden),
+      '10.0.0',
+      aggregateScores({ files: {} }, manifest.tests, []),
+      [],
+      new Date(),
+      {
+        mode: 'full',
+        embeddingModel: 'nomic-embed-text',
+      },
+    );
+    expect(r.config).toMatchObject({ trace_signal: 'full', embedding_model: 'nomic-embed-text' });
+    expect(goldenReport().config).not.toHaveProperty('embedding_model');
+  });
+
   test('writeReport refuses a report that breaks the contract', () => {
     const bad = { ...goldenReport(), subject_id: 'not an id' };
     expect(() => writeReport(bad, os.tmpdir())).toThrow(/does not match/);
