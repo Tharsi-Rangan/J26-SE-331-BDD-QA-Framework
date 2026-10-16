@@ -16,6 +16,13 @@ import {
   type Identifier,
   type SourceFile,
 } from 'ts-morph';
+import {
+  guessExternalOrBuiltin,
+  guessInternal,
+  LOGGING,
+  packageName,
+  type SideEffect,
+} from './side-effects.js';
 import type {
   DependencyKind,
   ModuleScan,
@@ -102,6 +109,8 @@ interface ExportEntry {
 export interface ScanOptions {
   /** Export names from subject-manifest.json; a warning is added for any the scan cannot find. */
   expectedExports?: string[];
+  /** How deep to follow internal modules for the side-effect guess (default 2). */
+  internalDepth?: number;
 }
 
 /**
@@ -298,10 +307,52 @@ export function scanModule(
       kind,
       ...(imp?.resolvedPath ? { resolvedPath: imp.resolvedPath } : {}),
       ...typeOf(u.node),
+      sideEffect: 'unknown',
+      sideEffectBasis: '',
       lines: [line],
     });
   }
   for (const d of deps.values()) d.lines.sort((a, b) => a - b);
+
+  // ---- 4b. Side-effect guess (C3-04 checklist). Internal modules: look at what they use. ----
+  const depth = options.internalDepth ?? 2;
+  const innerCache = new Map<string, ModuleScan | null>();
+  const innerScan = (resolvedPath: string): ModuleScan | null => {
+    if (!innerCache.has(resolvedPath)) {
+      let inner: ModuleScan | null = null;
+      try {
+        inner = scanModule(root, resolvedPath, { internalDepth: depth - 1 });
+      } catch {
+        inner = null;
+      }
+      innerCache.set(resolvedPath, inner);
+    }
+    return innerCache.get(resolvedPath)!;
+  };
+  /** Effects of what `symbol` of an internal module reaches when called (not what its file does on load). */
+  const innerEffects = (resolvedPath: string, symbol: string): SideEffect[] => {
+    if (depth <= 0 || resolvedPath.endsWith('.json')) return [];
+    const inner = innerScan(resolvedPath);
+    if (!inner) return ['unknown'];
+    const exp =
+      inner.exports.find((e) => e.name === symbol) ??
+      (symbol === 'default' ? inner.exports.find((e) => e.style === 'module') : undefined);
+    const keys = exp ? new Set(exp.dependencies) : new Set(inner.dependencies.map((d) => d.key));
+    return inner.dependencies
+      .filter((d) => keys.has(d.key) && !LOGGING.has(packageName(d.importSpecifier)))
+      .map((d) => d.sideEffect);
+  };
+  for (const d of deps.values()) {
+    const guess =
+      d.kind === 'internal_module'
+        ? guessInternal(
+            d.resolvedPath,
+            d.resolvedPath ? innerEffects(d.resolvedPath, d.symbol) : [],
+          )
+        : guessExternalOrBuiltin(d.kind, d.importSpecifier, d.symbol);
+    d.sideEffect = guess.sideEffect;
+    d.sideEffectBasis = guess.basis;
+  }
 
   // ---- 5. Exports, and the dependencies each one reaches ----
   const exportEntries = collectExports(sf, warnings);

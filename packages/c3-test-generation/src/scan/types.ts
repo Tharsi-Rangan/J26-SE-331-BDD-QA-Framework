@@ -1,6 +1,9 @@
 // Types for the C3-04 dependency scan (FR2).
 // Field names follow the `dependency` object in packages/contracts/schemas/c3-mock-decisions.schema.json,
 // so C3-05 can copy a scanned dependency straight into mock_decisions.json.
+import type { SideEffect } from './side-effects.js';
+
+export type { SideEffect } from './side-effects.js';
 
 /** Same 4 values as `dependency.kind` in the mock-decisions contract. */
 export type DependencyKind =
@@ -23,6 +26,8 @@ export interface ScannedDependency {
   kind: DependencyKind;
   resolvedPath?: string;
   typeSignature?: string; // from the TypeScript checker, e.g. '(user: any) => never'
+  sideEffect: SideEffect; // guess, same enum as dependency.side_effect in the contract
+  sideEffectBasis: string; // why, e.g. "node builtin 'fs'" or "file name 'src/userRepository.js'"
   lines: number[]; // every line where it is used (sorted, unique)
 }
 

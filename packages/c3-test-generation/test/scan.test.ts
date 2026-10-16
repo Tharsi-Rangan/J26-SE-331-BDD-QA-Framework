@@ -187,3 +187,44 @@ describe('C3-04 scan inside c3 run', () => {
     }
   });
 });
+
+describe('C3-04 side-effect guess', () => {
+  test('golden userRepository.save is a database dependency (from its file name)', () => {
+    const scan = scanModule(GOLDEN_SUBJECT, 'src/registration.js');
+    expect(dep(scan, './userRepository#save')).toMatchObject({
+      sideEffect: 'database',
+      sideEffectBasis: "file name 'src/userRepository.js' contains 'repository'",
+    });
+  });
+
+  test.each([
+    ['./repo#save', 'database'],
+    ['Date#now', 'time'],
+    ['Math#random', 'random'],
+    ['fs#readFileSync', 'io'],
+    ['node:path#join', 'none'],
+    ['crypto#createHash', 'none'],
+    ['debug#default', 'io'],
+    ['./limits.json#maxName', 'none'],
+    ['./helpers#pad', 'none'],
+    ['process#env', 'io'],
+  ])('%s -> %s', (key, effect) => {
+    const scan = scanModule(SUBJECT, 'lib/main.js');
+    expect(dep(scan, key)!.sideEffect).toBe(effect);
+  });
+
+  test('an internal module takes the effect of what it uses; unknown packages stay unknown', () => {
+    const scan = scanModule(SUBJECT, 'lib/badge.js');
+    expect(dep(scan, './does-not-exist#suffix')!.sideEffect).toBe('unknown');
+    expect(dep(scan, 'util#format')!.sideEffect).toBe('none');
+    const esm = scanModule(SUBJECT, 'lib/esm.mjs');
+    expect(dep(esm, 'node:timers/promises#setTimeout')!.sideEffect).toBe('time');
+    expect(dep(esm, 'qs#parse')!.sideEffect).toBe('none');
+  });
+
+  test('pathWords splits folders, dashes and camelCase', async () => {
+    const { pathWords } = await import('../src/scan/side-effects.js');
+    expect(pathWords('src/userRepository.js')).toEqual(['src', 'user', 'repository']);
+    expect(pathWords('lib/measure-text.js')).toEqual(['lib', 'measure', 'text']);
+  });
+});

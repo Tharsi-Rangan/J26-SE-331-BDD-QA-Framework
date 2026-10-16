@@ -23,7 +23,8 @@ pnpm c3 scan --subject-root <checked-out subject> --module lib/utils.js [--expor
 
 Lists the module's imports, what it really uses from each (plus globals such as `Date`,
 `Math.random`, `process`, timers), which dependencies each export reaches (also through local
-helpers), and what runs as soon as the module is required. Kinds match `dependency.kind` in
+helpers), what runs as soon as the module is required, and a side-effect guess (`io`, `network`,
+`time`, `random`, `database`, `none`, `unknown`) from known names. Kinds and side effects match `dependency.kind` and `dependency.side_effect` in
 `c3-mock-decisions.schema.json`.
 
 ## Develop
