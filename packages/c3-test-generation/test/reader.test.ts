@@ -139,6 +139,50 @@ describe('C3-03 readC3Inputs filters and errors', () => {
     }
   });
 
+  test('a second Examples block with reordered columns keeps its own header', () => {
+    const dir = copyGolden();
+    editText(dir, 'c2/features/REQ-EX-001.feature', (t) =>
+      t
+        .replace('      | 65  | accepted |\n      | 66  | rejected |\n', '')
+        .concat(
+          '\n    Examples:\n      | result   | age |\n      | accepted | 65  |\n      | rejected | 66  |\n',
+        ),
+    );
+    const outline = readC3Inputs(dir).scenarios.find((s) => s.scenarioId === 'SCN-EX-001-02')!;
+    expect(outline.examples).toHaveLength(6);
+    expect(outline.examples[5]).toMatchObject({
+      rowIndex: 6,
+      values: { age: '66', result: 'rejected' },
+      boundaryRef: 'BV-06',
+    });
+  });
+
+  test('rejects Examples blocks with different columns', () => {
+    const dir = copyGolden();
+    editText(dir, 'c2/features/REQ-EX-001.feature', (t) =>
+      t.concat('\n    Examples:\n      | years | result   |\n      | 70    | rejected |\n'),
+    );
+    expect(() => readC3Inputs(dir)).toThrow(/Examples columns \[years, result\] differ/);
+  });
+
+  test('rejects duplicate, missing and mismatching examples rows in the metadata', () => {
+    const dir = copyGolden();
+    editJson(dir, 'c2/scenario_metadata.json', (d) => {
+      const ex = d.scenarios[1].examples;
+      ex[1].row_index = 1; // row 1 twice, row 2 missing
+      ex[3].values.age = 63; // .feature row 4 says 64
+    });
+    try {
+      readC3Inputs(dir);
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      const problems = (err as C3InputError).problems.join('\n');
+      expect(problems).toMatch(/examples row_index 1 appears more than once/);
+      expect(problems).toMatch(/no examples entry for \.feature row 2/);
+      expect(problems).toMatch(/examples row 4 age=63 but the \.feature has "64"/);
+    }
+  });
+
   test('clear error on a Gherkin syntax error', () => {
     const dir = copyGolden();
     editText(dir, 'c2/features/REQ-EX-001.feature', (t) => t.replace('Feature:', 'Featur:'));

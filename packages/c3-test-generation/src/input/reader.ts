@@ -179,9 +179,38 @@ export function readC3Inputs(inDir: string): C3Inputs {
         `${where}: metadata has ${metaRows.length} examples but the .feature has ${sc.exampleRows.length} rows`,
       );
     }
-    const examples: ExampleRow[] = sc.exampleRows.map((cells, i) => {
-      const values = Object.fromEntries(sc.exampleHeader.map((h, j) => [h, cells[j] ?? '']));
-      const linked = metaRows.find((r) => r.row_index === i + 1);
+    // Each metadata row must point at exactly one .feature row, and agree with its cells,
+    // so a BV/EP ref can never be attached to the wrong row.
+    const metaByRow = new Map<number, (typeof metaRows)[number]>();
+    for (const r of metaRows) {
+      const idx = r.row_index;
+      if (!Number.isInteger(idx) || idx < 1 || idx > sc.exampleRows.length) {
+        problems.push(
+          `${where}: examples row_index ${String(idx)} is outside 1..${sc.exampleRows.length}`,
+        );
+      } else if (metaByRow.has(idx)) {
+        problems.push(`${where}: examples row_index ${idx} appears more than once`);
+      } else {
+        metaByRow.set(idx, r);
+        const cells = sc.exampleRows[idx - 1]!;
+        for (const [col, v] of Object.entries(r.values ?? {})) {
+          if (!(col in cells)) {
+            problems.push(`${where}: examples row ${idx} has column "${col}" not in the .feature`);
+          } else if (String(v) !== cells[col]) {
+            problems.push(
+              `${where}: examples row ${idx} ${col}=${JSON.stringify(v)} but the .feature has "${cells[col]}"`,
+            );
+          }
+        }
+      }
+    }
+    if (metaRows.length) {
+      for (let i = 1; i <= sc.exampleRows.length; i++) {
+        if (!metaByRow.has(i)) problems.push(`${where}: no examples entry for .feature row ${i}`);
+      }
+    }
+    const examples: ExampleRow[] = sc.exampleRows.map((values, i) => {
+      const linked = metaByRow.get(i + 1);
       return {
         rowIndex: i + 1,
         values,
