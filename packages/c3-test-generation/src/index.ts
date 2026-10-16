@@ -4,6 +4,7 @@ import type { RunOptions, ScanCommandOptions } from './args.js';
 import { readC3Inputs } from './input/reader.js';
 import type { C3Inputs } from './input/types.js';
 import { buildMockDecisions } from './mock/decisions.js';
+import { createModelClient, readModelConfig, type ModelClient } from './model/index.js';
 import { scanModule } from './scan/scanner.js';
 import type { ModuleScan } from './scan/types.js';
 
@@ -15,6 +16,7 @@ export type * from './scan/types.js';
 export { buildMockDecisions, chooseTargetExports } from './mock/decisions.js';
 export type { MockDecision, MockDecisionsFile, TargetChoice } from './mock/decisions.js';
 export { RULES, RULES_VERSION, decide } from './mock/rules.js';
+export * from './model/index.js';
 
 /** C3's version, written as producer.tool_version in every contract file. */
 export const TOOL_VERSION: string = JSON.parse(
@@ -141,4 +143,23 @@ function printScan(scan: ModuleScan, prefix: string): void {
     console.log(`  on require(): ${scan.moduleLoadDependencies.join(', ')}`);
   }
   for (const w of scan.warnings) console.log(`  warning: ${w}`);
+}
+
+/**
+ * `c3 model-check` (C3-06 / SH-07 evidence): one tiny call to the model in .env, cache off,
+ * so you see the real server, the model tag and how long it took.
+ */
+export async function modelCheck(client?: ModelClient): Promise<string> {
+  const config = readModelConfig();
+  const c = client ?? createModelClient({ ...config, cacheMode: 'off' });
+  console.log(`[c3] model-check: ${c.modelTag} at ${config.baseUrl}`);
+  const res = await c.complete({
+    messages: [{ role: 'user', content: 'Reply with exactly the word OK.' }],
+    maxTokens: 5,
+    purpose: 'model-check',
+  });
+  console.log(
+    `[c3] answer "${res.text.trim()}" from ${res.model} via ${res.provider} in ${res.latencyMs} ms`,
+  );
+  return res.text;
 }

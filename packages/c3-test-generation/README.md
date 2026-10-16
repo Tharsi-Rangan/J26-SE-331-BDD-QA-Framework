@@ -33,20 +33,38 @@ helpers), what runs as soon as the module is required, and a side-effect guess (
 (scenario, dependency) the test touches, i.e. what the function under test reaches plus what runs on
 `require()`. The decision always comes from a rule (first match wins, `rules_version` 0.1.0):
 
-| Rule | Decision | When |
-|---|---|---|
-| R-01 | mock | the dependency talks to the network |
-| R-02 | no_mock | the dependency only writes log or warning output |
-| R-03 | mock | the dependency uses a database |
-| R-04 | mock | the dependency reads the clock or random numbers |
-| R-05 | mock | the function under test reads or writes files, processes or the environment |
-| R-06 | no_mock | the I/O happens only while the module loads (the project's own files) |
-| R-07 | no_mock | the dependency has no side effect |
-| R-08 | no_mock | the side effect is unknown (kept real, flagged for review) |
+| Rule | Decision | When                                                                        |
+| ---- | -------- | --------------------------------------------------------------------------- |
+| R-01 | mock     | the dependency talks to the network                                         |
+| R-02 | no_mock  | the dependency only writes log or warning output                            |
+| R-03 | mock     | the dependency uses a database                                              |
+| R-04 | mock     | the dependency reads the clock or random numbers                            |
+| R-05 | mock     | the function under test reads or writes files, processes or the environment |
+| R-06 | no_mock  | the I/O happens only while the module loads (the project's own files)       |
+| R-07 | no_mock  | the dependency has no side effect                                           |
+| R-08 | no_mock  | the side effect is unknown (kept real, flagged for review)                  |
 
 The function under test is the manifest export named in the scenario text (or the only one). A
 `mock` decision gets a rule-based default `behaviour`; C3-07 replaces it with behaviour derived from
 the Given/When steps.
+
+### Model client (C3-06)
+
+All model calls go through one `ModelClient` (`src/model/`). Settings come only from `.env`
+(copy `.env.example`), so switching between local Ollama (daily work) and Hugging Face (official
+runs, provider pinned) is an `.env` change, never a code change.
+
+- Timeouts (`LLM_TIMEOUT_MS`) and retries with backoff for HTTP 429/5xx and network errors (`LLM_MAX_RETRIES`).
+- Every answer records the model tag (`<model>@<provider>`).
+- Answer cache in `model-cache/` (`LLM_CACHE=readwrite`). For the offline PP1 demo use
+  `LLM_CACHE=readonly`: only cached answers are used, and a missing one is a clear error.
+- Unit tests use `FakeModelClient` and never call a real model.
+
+Check your setup (cache off, one tiny prompt):
+
+```
+pnpm c3 model-check
+```
 
 ## Develop
 
@@ -56,7 +74,7 @@ pnpm --filter @j26/c3-test-generation typecheck   # TypeScript check
 pnpm --filter @j26/c3-test-generation add <dep>   # add a dependency to THIS package only
 ```
 
-Copy `.env.example` to `.env` for model settings. Never commit `.env`.
+Copy `.env.example` to `.env` for model settings (see "Model client" above). Never commit `.env`.
 
 ## First Planner tasks
 
