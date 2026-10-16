@@ -39,6 +39,46 @@ export function parseRunArgs(argv: string[], baseDir = callerDir()): RunOptions 
   };
 }
 
+/** Options for `c3 scan` (C3-04): scan one subject module and print or save the result. */
+export interface ScanCommandOptions {
+  subjectRoot: string;
+  module: string;
+  exports: string[];
+  out?: string;
+}
+
+/**
+ * Parse `c3 scan --subject-root <path> --module lib/utils.js [--exports a,b] [--out scan.json]`.
+ */
+export function parseScanArgs(argv: string[], baseDir = callerDir()): ScanCommandOptions {
+  const { positionals, values } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: {
+      'subject-root': { type: 'string' },
+      module: { type: 'string' },
+      exports: { type: 'string' },
+      out: { type: 'string' },
+    },
+  });
+  const usage =
+    'Usage: c3 scan --subject-root <path> --module <path inside subject> [--exports a,b] [--out file.json]';
+  if (positionals[0] !== 'scan' || !values['subject-root'] || !values.module) {
+    throw new Error(usage);
+  }
+  return {
+    subjectRoot: path.resolve(baseDir, values['subject-root']),
+    module: values.module,
+    exports: values.exports
+      ? values.exports
+          .split(',')
+          .map((e) => e.trim())
+          .filter(Boolean)
+      : [],
+    out: values.out === undefined ? undefined : path.resolve(baseDir, values.out),
+  };
+}
+
 /**
  * Folder the user ran the command from. pnpm runs scripts inside the package folder,
  * but sets INIT_CWD to the original folder, so relative paths work from the repo root.
