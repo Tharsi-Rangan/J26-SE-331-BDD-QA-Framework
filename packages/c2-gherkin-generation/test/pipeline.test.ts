@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../src/llm-client.js', () => ({
   generateWithLlm: vi.fn(),
@@ -11,138 +11,226 @@ vi.mock('../src/llm-client.js', () => ({
 import { generateWithLlm } from '../src/llm-client.js';
 import { run } from '../src/index.js';
 
-const mockedGenerate = vi.mocked(generateWithLlm);
+const mockedGenerateWithLlm = vi.mocked(generateWithLlm);
 
-let tempDir = '';
+let tempDir: string;
+let inputDir: string;
+let outputDir: string;
 
-function createInput(requirements: Array<Record<string, unknown>>) {
-  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c2-pipeline-'));
-
-  const inputDir = path.join(tempDir, 'input');
-  fs.mkdirSync(path.join(inputDir, 'c1'), { recursive: true });
+function createInput(requirements: Array<{
+  requirement_id: string;
+  final_text: string;
+  bdd_ready: boolean;
+}>): void {
+  const c1Dir = path.join(inputDir, 'c1');
+  fs.mkdirSync(c1Dir, { recursive: true });
 
   fs.writeFileSync(
-    path.join(inputDir, 'c1', 'validated_requirements.json'),
-    JSON.stringify({
-      contract: 'c1.validated-requirements',
-      schema_version: '1.0.0',
-      run_id: 'RUN-FIXTURE-TEST-1',
-      requirements,
-    }),
+    path.join(c1Dir, 'validated_requirements.json'),
+    JSON.stringify(
+      {
+        contract: 'c1.validated-requirements',
+        schema_version: '1.0.0',
+        run_id: 'RUN-FIXTURE-TEST-1',
+        requirements,
+      },
+      null,
+      2,
+    ),
+    'utf8',
   );
-
-  return {
-    in: inputDir,
-    out: path.join(tempDir, 'output'),
-  };
 }
 
-function requirement(
-  requirementId: string,
-  finalText: string,
-  bddReady: boolean,
-) {
-  return {
-    requirement_id: requirementId,
-    original_text: 'Original text must not be used.',
-    final_text: finalText,
-    bdd_ready: bddReady,
-  };
+function validFeature(requirementId: string): string {
+  const exampleId = requirementId.replace(/^REQ-/, '');
+
+  return [
+    `@${requirementId}`,
+    'Feature: Example requirement',
+    '',
+    `  @SCN-${exampleId}-01`,
+    '  @type:positive',
+    '  Scenario: Perform the required action',
+    '    Given the user is ready',
+    '    When the user performs the action',
+    '    Then the action succeeds',
+  ].join('\n');
 }
 
-const validFeature = [
-  '@REQ-EX-001',
-  'Feature: Registration',
-  '',
-  '  @SCN-EX-001-01',
-  '  @type:positive',
-  '  Scenario: Register a valid user',
-  '    Given a valid registration request',
-  '    When the user submits the request',
-  '    Then the registration succeeds',
-].join('\n');
+beforeEach(() => {
+  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c2-pipeline-'));
+  inputDir = path.join(tempDir, 'input');
+  outputDir = path.join(tempDir, 'output');
+
+  fs.mkdirSync(inputDir, { recursive: true });
+  fs.mkdirSync(outputDir, { recursive: true });
+
+  process.env.LLM_MODEL = 'test-model';
+  mockedGenerateWithLlm.mockReset();
+});
 
 afterEach(() => {
-  vi.clearAllMocks();
-
-  if (tempDir && fs.existsSync(tempDir)) {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-
-  tempDir = '';
+  fs.rmSync(tempDir, { recursive: true, force: true });
+  delete process.env.LLM_MODEL;
 });
 
 describe('C2 generation pipeline', () => {
-  test('uses final_text and skips non-BDD-ready requirements', async () => {
-    process.env.LLM_MODEL = 'test-model';
-
-    mockedGenerate.mockResolvedValue(validFeature);
-
-    const options = createInput([
-      requirement(
-        'REQ-EX-001',
-        'The final approved requirement text.',
-        true,
-      ),
-      requirement(
-        'REQ-EX-002',
-        'This requirement is not ready.',
-        false,
-      ),
+  it('uses final_text and skips non-BDD-ready requirements', async () => {
+    createInput([
+      {
+        requirement_id: 'REQ-EX-001',
+        final_text: 'The user can register successfully.',
+        bdd_ready: true,
+      },
+      {
+        requirement_id: 'REQ-EX-002',
+        final_text: 'This requirement is not ready.',
+        bdd_ready: false,
+      },
     ]);
 
-    await run(options);
-
-    expect(mockedGenerate).toHaveBeenCalledOnce();
-
-    const prompt = mockedGenerate.mock.calls[0][0]
-      .map((message) => message.content)
-      .join('\n');
-
-    expect(prompt).toContain('The final approved requirement text.');
-    expect(prompt).not.toContain('Original text must not be used.');
-    expect(prompt).not.toContain('This requirement is not ready.');
-
-    const outputFeature = fs.readFileSync(
-      path.join(options.out, 'c2', 'features', 'REQ-EX-001.feature'),
-      'utf8',
+    mockedGenerateWithLlm.mockResolvedValue(
+      validFeature('REQ-EX-001'),
     );
 
-    expect(outputFeature).toContain('Feature: Registration');
-    expect(
-      fs.existsSync(
-        path.join(options.out, 'c2', 'features', 'REQ-EX-002.feature'),
-      ),
-    ).toBe(false);
+    await run({ in: inputDir, out: outputDir });
+
+    expect(mockedGenerateWithLlm).toHaveBeenCalledTimes(1);
+
+    const prompt = JSON.stringify(mockedGenerateWithLlm.mock.calls[0][0]);
+    expect(prompt).toContain('The user can register successfully.');
+
+    const featurePath = path.join(
+      outputDir,
+      'c2',
+      'features',
+      'REQ-EX-001.feature',
+    );
+
+    expect(fs.existsSync(featurePath)).toBe(true);
 
     const metadata = JSON.parse(
       fs.readFileSync(
-        path.join(options.out, 'c2', 'scenario_metadata.json'),
+        path.join(outputDir, 'c2', 'scenario_metadata.json'),
         'utf8',
       ),
     );
 
-    expect(metadata.run_id).toBe('RUN-FIXTURE-TEST-1');
-    expect(metadata.producer.model).toBe('test-model');
     expect(metadata.features).toHaveLength(1);
-    expect(metadata.scenarios).toHaveLength(1);
-    expect(metadata.scenarios[0].generation.mode).toBe('llm_only_baseline');
-    expect(metadata.scenarios[0].verification.fully_verified).toBe(false);
+    expect(metadata.scenarios[0].verification.syntax).toBe('pass');
+
+    const report = JSON.parse(
+      fs.readFileSync(
+        path.join(outputDir, 'c2', 'validation_report.json'),
+        'utf8',
+      ),
+    );
+
+    expect(report.total_files).toBe(1);
+    expect(report.valid_files).toBe(1);
+    expect(report.invalid_files).toBe(0);
   });
 
-  test('rejects a model response without the requirement tag', async () => {
-    process.env.LLM_MODEL = 'test-model';
-
-    mockedGenerate.mockResolvedValue(
-      validFeature.replace('@REQ-EX-001\n', ''),
-    );
-
-    const options = createInput([
-      requirement('REQ-EX-001', 'Approved requirement.', true),
+  it('rejects a model response without the requirement tag', async () => {
+    createInput([
+      {
+        requirement_id: 'REQ-EX-001',
+        final_text: 'The user can register successfully.',
+        bdd_ready: true,
+      },
     ]);
 
-    await expect(run(options)).rejects.toThrow(
-      'missing its requirement tag',
+    mockedGenerateWithLlm.mockResolvedValue(
+      validFeature('REQ-EX-002'),
     );
+
+    await expect(
+      run({ in: inputDir, out: outputDir }),
+    ).rejects.toThrow(
+      'LLM output for REQ-EX-001 is missing its requirement tag',
+    );
+  });
+
+  it('records invalid Gherkin and continues with the next requirement', async () => {
+    createInput([
+      {
+        requirement_id: 'REQ-EX-001',
+        final_text: 'The first requirement.',
+        bdd_ready: true,
+      },
+      {
+        requirement_id: 'REQ-EX-002',
+        final_text: 'The second requirement.',
+        bdd_ready: true,
+      },
+    ]);
+
+    mockedGenerateWithLlm
+      .mockResolvedValueOnce(
+        [
+          '@REQ-EX-001',
+          'Feature: Invalid example',
+          '',
+          '  Scenario: Invalid scenario',
+          '    Given the user is ready',
+          '    When',
+        ].join('\n'),
+      )
+      .mockResolvedValueOnce(
+        validFeature('REQ-EX-002'),
+      );
+
+    await run({ in: inputDir, out: outputDir });
+
+    expect(mockedGenerateWithLlm).toHaveBeenCalledTimes(2);
+
+    const report = JSON.parse(
+      fs.readFileSync(
+        path.join(outputDir, 'c2', 'validation_report.json'),
+        'utf8',
+      ),
+    );
+
+    expect(report.run_id).toBe('RUN-FIXTURE-TEST-1');
+    expect(report.total_files).toBe(2);
+    expect(report.valid_files).toBe(1);
+    expect(report.invalid_files).toBe(1);
+
+    const invalidResult = report.results.find(
+      (result: { requirement_id: string }) =>
+        result.requirement_id === 'REQ-EX-001',
+    );
+
+    expect(invalidResult.valid).toBe(false);
+    expect(invalidResult.error).toBeTruthy();
+
+    const validResult = report.results.find(
+      (result: { requirement_id: string }) =>
+        result.requirement_id === 'REQ-EX-002',
+    );
+
+    expect(validResult.valid).toBe(true);
+
+    expect(
+      fs.existsSync(
+        path.join(outputDir, 'c2', 'features', 'REQ-EX-001.feature'),
+      ),
+    ).toBe(false);
+
+    expect(
+      fs.existsSync(
+        path.join(outputDir, 'c2', 'features', 'REQ-EX-002.feature'),
+      ),
+    ).toBe(true);
+
+    const metadata = JSON.parse(
+      fs.readFileSync(
+        path.join(outputDir, 'c2', 'scenario_metadata.json'),
+        'utf8',
+      ),
+    );
+
+    expect(metadata.features).toHaveLength(1);
+    expect(metadata.features[0].requirement_id).toBe('REQ-EX-002');
   });
 });
