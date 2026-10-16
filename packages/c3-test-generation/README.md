@@ -27,6 +27,27 @@ helpers), what runs as soon as the module is required, and a side-effect guess (
 `time`, `random`, `database`, `none`, `unknown`) from known names. Kinds and side effects match `dependency.kind` and `dependency.side_effect` in
 `c3-mock-decisions.schema.json`.
 
+### Mock decisions (C3-05)
+
+`run` turns the scan into `<out>/c3/mock_decisions.json` (contract file): one decision per
+(scenario, dependency) the test touches, i.e. what the function under test reaches plus what runs on
+`require()`. The decision always comes from a rule (first match wins, `rules_version` 0.1.0):
+
+| Rule | Decision | When |
+|---|---|---|
+| R-01 | mock | the dependency talks to the network |
+| R-02 | no_mock | the dependency only writes log or warning output |
+| R-03 | mock | the dependency uses a database |
+| R-04 | mock | the dependency reads the clock or random numbers |
+| R-05 | mock | the function under test reads or writes files, processes or the environment |
+| R-06 | no_mock | the I/O happens only while the module loads (the project's own files) |
+| R-07 | no_mock | the dependency has no side effect |
+| R-08 | no_mock | the side effect is unknown (kept real, flagged for review) |
+
+The function under test is the manifest export named in the scenario text (or the only one). A
+`mock` decision gets a rule-based default `behaviour`; C3-07 replaces it with behaviour derived from
+the Given/When steps.
+
 ## Develop
 
 ```

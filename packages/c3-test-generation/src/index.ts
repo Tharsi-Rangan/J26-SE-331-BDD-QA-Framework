@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { RunOptions, ScanCommandOptions } from './args.js';
 import { readC3Inputs } from './input/reader.js';
 import type { C3Inputs } from './input/types.js';
+import { buildMockDecisions } from './mock/decisions.js';
 import { scanModule } from './scan/scanner.js';
 import type { ModuleScan } from './scan/types.js';
 
@@ -11,15 +12,24 @@ export { readC3Inputs, C3InputError } from './input/reader.js';
 export type * from './input/types.js';
 export { scanModule, classifySpecifier } from './scan/scanner.js';
 export type * from './scan/types.js';
+export { buildMockDecisions, chooseTargetExports } from './mock/decisions.js';
+export type { MockDecision, MockDecisionsFile, TargetChoice } from './mock/decisions.js';
+export { RULES, RULES_VERSION, decide } from './mock/rules.js';
+
+/** C3's version, written as producer.tool_version in every contract file. */
+export const TOOL_VERSION: string = JSON.parse(
+  fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+).version;
 
 /** Internal (non-contract) work files go here, next to the contract files in <out>/c3/. */
 export const WORK_DIR = 'c3/work';
 
 /**
  * Runnable Test Generation with Explainable Assertions and Mocking.
- * Done so far: C3-03 input reader, C3-04 dependency scan. Next: C3-05 rule-based mock decisions.
+ * Done so far: C3-03 input reader, C3-04 dependency scan, C3-05 rule-based mock decisions.
+ * Next: C3-06 model client.
  */
-export async function run(options: RunOptions): Promise<void> {
+export async function run(options: RunOptions & { generatedAt?: string }): Promise<void> {
   if (!options.in) throw new Error('Missing --in <run folder>');
   const inputs = readC3Inputs(options.in);
   console.log(
@@ -40,6 +50,27 @@ export async function run(options: RunOptions): Promise<void> {
     fs.writeFileSync(file, JSON.stringify(scans, null, 2) + '\n');
     for (const s of scans) printScan(s.scan, `${s.subjectId}:`);
     console.log(`[c3] dependency scan written to ${file}`);
+  }
+
+  // C3-05: rule-based mock / no_mock decisions -> c3/mock_decisions.json (contract file)
+  if (scans.length && inputs.scenarios.length) {
+    const index = new Map(scans.map((s) => [`${s.subjectId}|${s.modulePath}`, s.scan]));
+    const { file, targets } = buildMockDecisions(inputs, index, {
+      generatedAt: options.generatedAt,
+      toolVersion: TOOL_VERSION,
+    });
+    const out = path.join(options.out, 'c3', 'mock_decisions.json');
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, JSON.stringify(file, null, 2) + '\n');
+    console.log(`[c3] mock decisions (rules ${file.rules_version}):`);
+    for (const sc of inputs.scenarios) {
+      console.log(`  ${sc.scenarioId} tests ${targets.get(sc.scenarioId)?.exports.join(', ')}`);
+      for (const d of file.decisions.filter((x) => x.scenario_id === sc.scenarioId)) {
+        const dep = `${d.dependency.import_specifier}#${d.dependency.symbol}`;
+        console.log(`    ${d.decision_id} ${d.decision.padEnd(7)} ${d.rule_id} ${dep}`);
+      }
+    }
+    console.log(`[c3] mock decisions written to ${out}`);
   }
 }
 
