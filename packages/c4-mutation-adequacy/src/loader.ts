@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { assertMatchesSchema } from './contracts.js';
-import type { Subject, SubjectManifest, TestManifest } from './types.js';
+import type { ScenarioMetadata, Subject, SubjectManifest, TestManifest } from './types.js';
 
 /** Everything C4 needs from the run folder, checked against the contracts. */
 export interface C4Inputs {
@@ -61,4 +61,11 @@ export function loadInputs(inDir: string, subjectRoot?: string): C4Inputs {
     jestConfig,
     mutate: [path.posix.join(subjectDirInRun, subject.module_path)],
   };
+}
+
+/** Load `c2/scenario_metadata.json`. Only the embedding trace signals need it. */
+export function loadScenarioMetadata(inDir: string): ScenarioMetadata {
+  const meta = readJson<ScenarioMetadata>(path.join(inDir, 'c2', 'scenario_metadata.json'));
+  assertMatchesSchema(meta, 'c2-scenario-metadata.schema.json', 'c2/scenario_metadata.json');
+  return meta;
 }
