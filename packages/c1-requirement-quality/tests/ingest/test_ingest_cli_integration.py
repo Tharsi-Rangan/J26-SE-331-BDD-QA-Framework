@@ -180,3 +180,36 @@ def test_cli_run_pdf_srs_contract_validation(tmp_path: Path):
     _validate_contract_artifact(artifact)
 
 
+def test_cli_generate_candidates_with_docx_srs(tmp_path: Path):
+    docx_path = tmp_path / "spec.docx"
+    doc = docx.Document()
+    doc.add_heading("1.0 Storage", level=1)
+    doc.add_paragraph("1.1 The database shall retain audit logs for approximately 30 days.")
+    doc.save(str(docx_path))
+
+    run_dir = tmp_path / "run_initial"
+    main([
+        "run",
+        "--srs", str(docx_path),
+        "--out", str(run_dir),
+        "--run-id", "RUN-20261013-120005-ab12",
+        "--registry", str(tmp_path / "reg.json"),
+    ])
+
+    val_path = run_dir / "c1" / "validated_requirements.json"
+    assert val_path.is_file()
+
+    cand_out = tmp_path / "candidate_suggestions.json"
+    ret = main([
+        "generate-candidates",
+        "--in", str(val_path),
+        "--srs", str(docx_path),
+        "--out", str(cand_out),
+    ])
+    assert ret == 0
+    assert cand_out.is_file()
+
+    cand_data = json.loads(cand_out.read_text(encoding="utf-8"))
+    assert cand_data["contract"] == "c1.candidate-suggestions"
+    assert cand_data["schema_version"] == "1.0.0"
+    assert len(cand_data["requirements"]) == 1

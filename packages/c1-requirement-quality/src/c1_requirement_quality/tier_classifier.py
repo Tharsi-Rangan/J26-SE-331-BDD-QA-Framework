@@ -25,11 +25,16 @@ def classify_tier(
     *,
     original_text: str | None = None,
     candidate_text: str | None = None,
+    human_reviewed: bool = False,
+    unresolved_clarification: bool = False,
 ) -> dict[str, Any]:
     """Classify a requirement conservatively using quality, grounding and pairs.
 
-    Tier 1 requires no quality findings, supported grounding with source
-    evidence, and no unresolved peer comparison. Tier 2 is used whenever
+    Tier 1 requires no quality findings, supported grounding with attributable
+    evidence, and no unresolved peer/question comparison. An explicitly reviewed
+    current semantic rewrite may qualify; unreviewed edits remain structural-only.
+    This assessment does not grant approval or authorize further semantic edits.
+    Tier 2 is used whenever
     clarification or further evidence may be needed. Tier 3 is reserved for
     explicit supported contradictions; the current analyses provide no
     approved standalone threshold for calling other defects ``too broken``.
@@ -82,6 +87,8 @@ def classify_tier(
         )
 
     reasons = []
+    if unresolved_clarification:
+        reasons.append({"kind": "clarification_unresolved", "explanation": "An active question has no valid relevant current answer."})
     for finding in findings:
         reasons.append({
             "kind": "quality_defect",
@@ -137,7 +144,7 @@ def classify_tier(
             re.sub(r"\s+", " ", original_text).strip()
             == re.sub(r"\s+", " ", candidate_text).strip()
         )
-        if not candidate_is_structural_only:
+        if not candidate_is_structural_only and not human_reviewed:
             reasons.append({
                 "kind": "candidate_changes_requirement_content",
                 "explanation": "Tier 1 only permits whitespace normalization; this candidate changes the original text content and needs human review.",
@@ -147,13 +154,15 @@ def classify_tier(
 
     if (
         not findings and grounding_status == "supported" and grounding_evidence
-        and no_consistency_uncertainty and candidate_is_structural_only
+        and no_consistency_uncertainty and (candidate_is_structural_only or human_reviewed) and not unresolved_clarification
     ):
         return _assessment(
             TIER_1,
-            "No quality defect was detected, the requirement has traceable SRS support, and no peer conflict was found; only meaning-preserving structural edits are suitable for this tier.",
+            ("The explicitly reviewed current rewrite passes the implemented independent quality, evidence and consistency gates."
+             if human_reviewed and not candidate_is_structural_only else
+             "No quality defect was detected, the requirement has traceable source support, and no peer conflict was found; only meaning-preserving structural edits are suitable for this tier."),
             [{
-                "kind": "safe_structural_only",
+                "kind": "reviewed_current_rewrite" if human_reviewed and not candidate_is_structural_only else "safe_structural_only",
                 "explanation": "No facts or behavior changes are authorized by this tier assessment.",
                 "grounding_evidence": grounding_evidence,
                 "consistent_pairs": [

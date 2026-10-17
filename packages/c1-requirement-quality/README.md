@@ -57,6 +57,165 @@ For CLI compatibility, context is the JSON encoding of the NIR requirement's
 No historical migration has been executed. The team must choose an owner,
 history, document bindings and destination before doing so.
 
+### Source integrity and publication (Phase 1B.1)
+
+Each new run stores read-only original bytes in `c1/internal/source/<filename>`,
+the complete NIR in `c1/internal/normalized_ingestion.json`, and identity/hash/
+format/original-location metadata in `c1/internal/source_manifest.json`.
+The manifest hashes original bytes, normalized data and the validated artifact.
+The frozen contract contains no new internal fields; its existing
+`source_document.path` points to the archived source relative to the run folder.
+
+Both `refine` and `generate-candidates` require this bundle and verify the input
+artifact, archive, normalized data and supplied SRS bytes before using evidence.
+Same-name changed content is rejected. Renamed but byte-identical supplied
+files are accepted. Refinement copies the original source/NIR unchanged into
+its new output and binds a new manifest to the new artifact. Legacy artifacts
+without a manifest fail closed: they require an explicitly verified reprocessing
+run, not filename-only fallback or an inferred hash.
+
+Runs require a fresh `c1` directory, stage output in a sibling
+`.c1-run-pending-*` folder and validate before publishing. Registry allocation
+stays in memory until publication; the registry is committed last under an
+exclusive lock and stale snapshots are rejected. If registry publication fails,
+the C1 directory is moved back to staging and the registry is unchanged.
+Failed staging files are retained for inspection, never used as final output.
+Refinement also stages before publishing. Candidate sidecars refuse overwrites.
+After a process crash, leftover locks/staging need explicit inspection; there is
+no automatic recovery/resumption implementation in Phase 1B.1. Read-only files
+and hashes detect accidental alteration, not coordinated tampering by a user
+who can replace the entire bundle. Filesystem crash-atomicity across the run
+directory and registry is not claimed.
+
+### Human clarification history (Phase 1B.2)
+
+New runs also write `c1/internal/workflow_snapshot.json`, with its SHA256 bound
+in the source manifest. Each refinement snapshot preserves cumulative events,
+question texts/identities/statuses, all answer versions, candidate disposition,
+and explicit decisions. Parent artifact paths are relative to the new `c1`
+folder; parent artifact/ledger hashes, snapshot IDs, source identity and history
+prefixes are checked through the complete chain. Keep parent snapshots available.
+Moving just one snapshot without its parents breaks the reference and fails
+closed. Existing snapshots are never overwritten.
+
+Question IDs hash the requirement ID and whitespace-normalized question text.
+Automatic placeholder questions and custom string questions are deduplicated;
+original text variants remain auditable. Internal statuses are `OPEN`,
+`ANSWERED`, `REOPENED`, and `CLOSED`. Answers are append-only versions with
+question/requirement IDs, supplied provenance, event/snapshot references, and
+resolution state at submission. Reopening clears the current answer pointer
+and retains every earlier version. `unanswered_question_ids` contains only
+open/reopened questions. Human answers never become original SRS facts.
+
+Existing `refine --actions <JSON>` fields remain supported. Additional internal
+action fields are:
+
+- `actor_id` and `human_timestamp`: optional, explicitly supplied identifiers or
+  claimed times. If absent, human actions use actor `unknown` and no human time.
+  Events record the actual system `recorded_at` separately; automatic question
+  creation uses actor `system`.
+- `workflow_action`: `approve`, `reject`, `request_clarification`, `escalate`,
+  `reopen`, or `resolve_escalation`. Approve/reject map to existing contract
+  decisions; the other actions remain internal. Resolution requires non-empty
+  `resolution` text and reruns the existing checks. If a contradiction remains,
+  escalation stays active. Reopening revokes approval and implies no new answer.
+- `question_actions`: a list of `{ "question_id": "<ID>", "status":
+  "REOPENED|CLOSED", "reason": "<optional reason>" }` operations.
+- `reconsider_candidate_ids`: explicitly permits reconsidering prior rejected
+  candidates. Reconsideration resets the selected rejection to pending, never
+  to approval. New selection still does not imply approval.
+- Answers may reference `question_id` or the existing `question` text, and may
+  supply per-answer `actor_id`, `human_timestamp` and `provenance` metadata.
+
+The workflow sidecar distinguishes `AWAITING_CLARIFICATION`,
+`AWAITING_ESCALATION`, `REVIEW_PENDING`, `REJECTED` and `VALIDATED`. The CLI
+prints these states and unanswered counts. It remains a file-based batch CLI,
+with no interactive prompt, web UI, or automatic answers. Tier 2 can remain
+awaiting review/clarification even when every recorded question is answered.
+
+Phase 1B.2 originally left BDD-readiness rules unchanged. Phase 1B.3 now
+uses valid active clarification resolution and independently revalidates the
+current rewrite as documented below. The contract question list still retains
+historical text. An empty unanswered index alone is never readiness approval.
+
+Candidate generation verifies the lineage and reuses active recorded answers
+when no explicit answer file is supplied. It excludes reopened answers, preserves
+human rejections, and blocks active escalations. Deterministic generation
+strategies and original-SRS grounding checks are unchanged. An explicit answer
+file still supplies generation-only inputs; persist those answers with `refine`
+if they must become part of the snapshot audit history.
+
+Phase 1B.1 source-verified snapshots without a workflow sidecar can be adopted
+prospectively into a new snapshot without modifying the parent. Existing
+contract decisions/questions/candidates and available diagnostic answers are
+retained; old diagnostics are labeled `legacy_diagnostics_unsealed` and their
+current hash is captured. This does not retrospectively authenticate their
+original human actor/time. Missing older answer history cannot be reconstructed.
+See [the Phase 1B.2 implementation report](docs/phase1b2-implementation.md).
+
+### Current validation lifecycle (Phase 1B.3)
+
+Every refinement round replaces current defects, grounding, final-set
+consistency, tier and readiness fields for **all** requirements, including
+rejection, replacement, answer updates and reopening. Original text remains
+unchanged in the contract. The workflow preserves `original_assessment` and its
+verified root snapshot reference, plus separately recomputed `current_validation`.
+Current candidate diagnostics use final peer texts; pre-action assessments remain
+in diagnostics for audit. Relevant input signatures include text/selection,
+human decision, source text, peer texts, questions/answer history, escalation,
+request state and policy version. Results are always recomputed rather than
+reused merely because a signature matches.
+
+Readiness uses validation-unresolved questions, not historical text. OPEN and
+REOPENED remain unresolved. ANSWERED requires a valid relevant current answer.
+CLOSED defaults to `closure_kind: DEFERRED`; explicit `WAIVED` is not an answer.
+`closure_kind: ANSWERED` allows a closed question to use its existing valid
+answer, but cannot manufacture one. Deferred/waived/invalid answers continue
+to block validation; their histories are retained.
+
+Active human clarification can support only explicitly supplied facts. Supported
+routes are exact named-placeholder substitution retaining the SRS scaffold;
+explicit `replaces_span` plus replacement answer retaining the rest of the
+original obligation; or an exact whole shall/must statement responding to a
+requirement/rule/behavior question. Duration answers must be recognizable
+duration values, not a duration followed by unrelated new obligations. Known
+question types reject clearly mismatched answers. Uncovered changes to numbers,
+actors, conditions, obligations or units fail grounding. No paraphrase or unit
+conversion is inferred.
+
+For a span replacement, add `replaces_span` to the recorded answer, e.g. the
+literal defective span `quickly` and an explicit replacement answer
+`within 2 seconds`. This is an internal clarification binding, not an automatic
+rewrite strategy. The existing deterministic generator and human-authored
+candidate paths remain available; no LLM backend is introduced.
+
+SRS and human evidence remain separate in internal `grounding_categories`.
+The shared artifact uses only existing evidence fields, with `HUMAN-` chunk IDs
+and section `Explicit human clarification (not original SRS)` for human quotes.
+Unsupported facts and conflict diagnostics remain internal. Original evidence
+is preserved in the original assessment/source bundle.
+
+A semantic candidate stays Tier 2 before required human review. After explicit
+approval/editing, it can become current Tier 1 only if quality, attributable
+grounding, resolved questions and peer consistency independently pass. The
+frozen `TIER_1_AUTO_REFINE` label is reused for the current eligible assessment;
+it grants no permission for further autonomous semantic edits. Confirmed
+contradictions always retain Tier 3 precedence. Active escalation blocks
+readiness until explicit resolution and successful rechecking. A resolution
+statement alone is insufficient.
+
+The current BDD element policy remains actor/subject, shall/must plus action,
+no unresolved placeholders/questions, upstream quality/grounding/consistency,
+and eligible current handling. Verified single-requirement no-peer consistency
+is non-blocking. Approval alone and an answer alone never pass these gates.
+Answer revisions revoke inherited approval unless explicitly reaffirmed; new
+candidate selection/editing and reopening do not carry old approval forward.
+Final ready representation remains `validation.status: passed`, an accepted
+human decision and `bdd_ready: true`; no schema enum is added.
+
+See [the Phase 1B.3 implementation report](docs/phase1b3-implementation.md) and
+[the pre-implementation findings](docs/phase1b3-validation-audit.md).
+
 Validate your output against the shared contract (from the repo root):
 
 ```
@@ -138,7 +297,7 @@ recalculates tiers after all selected final texts are known.
 
 | Tier | Deterministic rule | Handling meaning |
 | --- | --- | --- |
-| `TIER_1_AUTO_REFINE` | No quality findings; grounding is supported with evidence; and every peer comparison is consistent, or no peer requirement exists. For a candidate, its content must match the original exactly after whitespace normalization. | Only whitespace-level, meaning-preserving structural edits are in scope. The tier does not generate or approve an edit. |
+| `TIER_1_AUTO_REFINE` | No quality findings; attributable supported evidence; resolved validation questions; and consistent peers or a verified no-peer case. Unreviewed candidates must preserve content after whitespace normalization; explicitly reviewed current semantic rewrites may qualify after all independent gates pass. | Initial automatic edits remain structural-only. Current qualification does not generate, approve, or authorize further semantic edits. |
 | `TIER_2_CLARIFY` | Any quality finding; unsupported, partial, missing, or untraceable grounding; or any potential/unassessed peer comparison. | Human review or clarification is needed before adding or changing facts or behavior. |
 | `TIER_3_ESCALATE` | A confirmed pairwise contradiction, including a grounding contradiction corroborated by the deterministic consistency rules. | Human resolution is required before proceeding. |
 
@@ -231,7 +390,7 @@ grounding evidence can be established.
 
 ## User-authored refinement candidates and decisions
 
-C1 does not generate rewrite text. The `refine` command accepts alternatives
+The `refine` command does not generate rewrite text; it accepts alternatives
 written by a requirement engineer, evaluates each with the existing lexical
 quality, grounding, and consistency checks, and applies only an explicitly supplied human
 decision. The original requirement is preserved in `original_text` in every
@@ -274,24 +433,23 @@ candidate text. A selection alone leaves `human_decision` pending and
 `final_text` equal to `original_text`. `approved` requires a selected
 candidate; `edited` requires `edited_text` and records that text as a
 candidate. `rejected` and `pending` retain the original as `final_text`.
-`not_required` is accepted only when explicitly present in the action file.
+`not_required` must first be explicitly supplied by a human and can then be
+preserved in subsequent unchanged refinement rounds.
 Candidate checks, evidence, unsupported claims, and supplied clarification
 answers are written to `c1/refinement_diagnostics.json`; the validated output
 contains only fields permitted by the frozen v1.0.0 schema.
 
-Candidate diagnostics list quality, grounding, consistency, and BDD-readiness
-checks independently. The BDD-readiness check is `skipped` because no approved
-C1 criteria for that check are documented; the diagnostic records this reason
-and keeps each candidate `bdd_ready: false`. Per current team direction, the
-gate remains closed until approved criteria are supplied.
+Candidate diagnostics list independent quality, grounding, final-peer
+consistency and BDD-readiness checks. Proposal evaluation itself never sets
+`bdd_ready: true`; the final requirement must satisfy every applicable check
+and the required explicit human decision.
 
-Candidate grounding uses the lexical exact-claim checker. This is deliberately
-conservative: paraphrases or facts supplied only in a clarification answer may
-remain unsupported against the SRS. The answer is visible in diagnostics but
-is not treated as SRS evidence. Human approval does not override failed or
-skipped checks. The CLI keeps `bdd_ready` false while consistency or BDD
-readiness checks are skipped. Tier classification follows the documented
-evidence rules above; it does not approve a candidate or set BDD readiness.
+Grounding uses lexical SRS support plus separately attributed, exact active
+clarification support as specified in Phase 1B.3. Unsupported paraphrases,
+unprovided facts and unverified conflicts remain blocked. Human answers are
+never relabeled as SRS evidence. Approval does not override failed/skipped
+checks; only the already-defined verified single-requirement no-peer skip is
+non-blocking. Tier is a current handling assessment and never implies approval.
 Inconclusive consistency comparisons keep the conservative
 `potential_conflict` contract sentinel and do not pass the consistency check.
 

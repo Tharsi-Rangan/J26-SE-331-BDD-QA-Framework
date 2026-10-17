@@ -12,11 +12,18 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from c1_requirement_quality.bdd_readiness import (
+    bdd_check_from_validation,
+    is_single_requirement_no_peers,
+)
 from c1_requirement_quality.grounding_analyser import analyse_grounding
 from c1_requirement_quality.consistency_analyser import analyse_consistency, consistency_for_requirement
 from c1_requirement_quality.quality_analyser import analyse_requirement
 from c1_requirement_quality.severity_priority import assess_defects
 from c1_requirement_quality.tier_classifier import classify_tier
+from c1_requirement_quality.validation_lifecycle import (
+    grounded_current, clarification_resolution, validation_signature,
+)
 
 DECISIONS = frozenset({"approved", "rejected", "edited", "pending", "not_required"})
 ACCEPTED_DECISIONS = frozenset({"approved", "edited", "not_required"})
@@ -50,12 +57,24 @@ def can_mark_bdd_ready(
     validation_status: str,
     checks: Mapping[str, str],
     human_decision: str,
+    *,
+    consistency_result: Mapping[str, Any] | None = None,
 ) -> bool:
     """Apply the frozen readiness guard without supplying missing policy checks."""
+    consistency_satisfied = (
+        checks.get("consistency") == "pass"
+        or (
+            checks.get("consistency") == "skipped"
+            and is_single_requirement_no_peers(consistency_result)
+        )
+    )
     return (
         validation_status == "passed"
         and human_decision in ACCEPTED_DECISIONS
-        and all(checks.get(name) == "pass" for name in REQUIRED_READINESS_CHECKS)
+        and checks.get("quality") == "pass"
+        and checks.get("grounding") == "pass"
+        and checks.get("bdd_readiness") == "pass"
+        and consistency_satisfied
     )
 
 
@@ -132,9 +151,10 @@ def _validate_answers(value: Any, questions: list[str]) -> list[dict[str, str]]:
     return answers
 
 
-def _evaluate_candidate(text: str, srs_text: str) -> dict[str, Any]:
+def _evaluate_candidate(text: str, srs_text: str, original_text: str | None = None,
+                        workflow_record: dict[str, Any] | None = None) -> dict[str, Any]:
     findings = analyse_requirement(text)
-    grounding = analyse_grounding(text, srs_text)
+    grounding = grounded_current(text, srs_text, original_text, workflow_record)
     grounding_status = grounding.get("status")
     if grounding_status == "supported":
         grounding_check = "pass"
@@ -168,27 +188,41 @@ def _consistency_with_candidate(
 
 
 def _candidate_validation(
-    evaluation: Mapping[str, Any], consistency: Mapping[str, Any]
+    evaluation: Mapping[str, Any],
+    consistency: Mapping[str, Any],
+    *,
+    text: str,
+    tier: str | None = None,
+    clarification_questions: list[str] | None = None,
+    escalation_active: bool = False,
 ) -> dict[str, Any]:
-    """Record independent candidate checks without inventing a BDD rule."""
-    checks = {
+    """Record independent candidate checks including BDD-readiness."""
+    checks: dict[str, str] = {
         "quality": str(evaluation["quality_check"]),
         "grounding": str(evaluation["grounding_check"]),
         "consistency": str(consistency["check"]),
-        "bdd_readiness": "skipped",
+        "bdd_readiness": "skipped",  # provisional; overwritten below
     }
+    bdd_result = bdd_check_from_validation(
+        text,
+        checks,
+        tier=tier,
+        clarification_questions=clarification_questions,
+        consistency_result=consistency,
+        escalation_active=escalation_active,
+    )
+    checks["bdd_readiness"] = bdd_result["check"]
     status = "failed" if "fail" in checks.values() else "needs_review"
+    # Candidate evaluation never implies human approval.
     ready = can_mark_bdd_ready(status, checks, "pending")
     return {
         "status": status,
         "checks": checks,
         "bdd_readiness": {
-            "check": checks["bdd_readiness"],
+            "check": bdd_result["check"],
             "bdd_ready": ready,
-            "explanation": (
-                "No approved C1 BDD-readiness criteria are defined; the check is skipped. "
-                "Candidate evaluation does not imply human approval."
-            ),
+            "reasons": bdd_result["reasons"],
+            "explanation": bdd_result["explanation"],
         },
     }
 
@@ -197,6 +231,8 @@ def process_refinement_actions(
     validated_requirements: dict[str, Any],
     actions: dict[str, Any],
     srs_text: str,
+    *,
+    workflow_records: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Apply explicit user-authored candidates and decisions to a C1 artifact.
 
@@ -263,6 +299,7 @@ def process_refinement_actions(
 
         questions = list(dict.fromkeys(
             clarification_questions_for(original_text)
+            + _require_text_list(requirement.get("clarification_questions", []), "existing clarification_questions")
             + _require_text_list(action.get("clarification_questions", []), "clarification_questions")
         ))
         answers = _validate_answers(action.get("clarification_answers", []), questions)
@@ -278,15 +315,23 @@ def process_refinement_actions(
         decision = action.get("human_decision", requirement.get("human_decision", "pending"))
         if decision not in DECISIONS:
             raise ValueError(f"invalid human_decision: {decision}")
+        if not explicit_decision and (
+            action.get("selected_candidate_id", previous_selected_id) != previous_selected_id
+            or "selected_candidate_text" in action and action["selected_candidate_text"] != _candidate_index(requirement).get(previous_selected_id)
+            or "edited_text" in action and action["edited_text"] != _candidate_index(requirement).get(previous_selected_id)
+        ):
+            decision = "pending"
 
         edited_text = action.get("edited_text")
         if decision == "edited":
+            if not explicit_decision and edited_text is None:
+                edited_text = _candidate_index(requirement).get(previous_selected_id)
             if not isinstance(edited_text, str) or not edited_text.strip():
                 raise ValueError("edited decision requires non-empty edited_text")
             selected_id = _add_candidate(requirement_id, original_text, candidates, edited_text)
         else:
             selected_id = action.get("selected_candidate_id", requirement.get("selected_candidate_id"))
-            selected_text = action.get("selected_candidate_text")
+            selected_text = action.get("selected_candidate_text", action.get("edited_text"))
             if selected_text is not None:
                 if not isinstance(selected_text, str) or not selected_text.strip():
                     raise ValueError("selected_candidate_text must not be empty")
@@ -303,16 +348,36 @@ def process_refinement_actions(
             decision = "pending"
         if decision == "approved" and selected_id is None:
             raise ValueError("approved decision requires a selected candidate")
-        if decision == "not_required" and "human_decision" not in action:
+        if decision == "not_required" and "human_decision" not in action and requirement.get("human_decision") != "not_required":
             raise ValueError("not_required must be explicitly supplied by a human action")
 
         candidate_diagnostics = []
         for candidate in candidates:
-            evaluation = _evaluate_candidate(candidate["text"], srs_text)
+            record = workflow_records.get(requirement_id) if workflow_records else None
+            candidate_resolution = clarification_resolution(record, original_text, questions)
+            candidate_escalation = bool(record.get("escalation_active") if record else requirement.get("tier") == "TIER_3_ESCALATE")
+            evaluation = _evaluate_candidate(candidate["text"], srs_text, original_text, record)
             candidate_consistency = _consistency_with_candidate(
                 requirement_id, candidate["text"], baseline_requirements
             )
-            candidate_validation = _candidate_validation(evaluation, candidate_consistency)
+            candidate_tier_result = classify_tier(
+                evaluation["quality_findings"],
+                evaluation["grounding"],
+                candidate_consistency,
+                original_text=original_text,
+                candidate_text=candidate["text"],
+                human_reviewed=(decision in ACCEPTED_DECISIONS and candidate["candidate_id"] == selected_id
+                                and not candidate_resolution["unresolved_questions"] and not candidate_escalation),
+                unresolved_clarification=bool(candidate_resolution["unresolved_questions"]),
+            )
+            candidate_validation = _candidate_validation(
+                evaluation,
+                candidate_consistency,
+                text=candidate["text"],
+                tier=candidate_tier_result["tier"],
+                clarification_questions=candidate_resolution["unresolved_questions"] + clarification_questions_for(candidate["text"]),
+                escalation_active=candidate_escalation,
+            )
             candidate_diagnostics.append({
                 "candidate_id": candidate["candidate_id"],
                 "text": candidate["text"],
@@ -320,13 +385,7 @@ def process_refinement_actions(
                 "consistency": candidate_consistency,
                 "validation": candidate_validation,
                 "bdd_readiness": candidate_validation["bdd_readiness"],
-                "tier": classify_tier(
-                    evaluation["quality_findings"],
-                    evaluation["grounding"],
-                    candidate_consistency,
-                    original_text=original_text,
-                    candidate_text=candidate["text"],
-                ),
+                "tier": candidate_tier_result,
             })
 
         requirement["clarification_questions"] = questions
@@ -343,7 +402,9 @@ def process_refinement_actions(
             # Pair analysis is recomputed across the final selected text set
             # after all actions have been applied.
             checks["consistency"] = "skipped"
-            checks["bdd_readiness"] = "skipped"
+            # BDD-readiness is evaluated provisionally here; it is recomputed
+            # in the final reconciliation pass once consistency is resolved.
+            checks["bdd_readiness"] = "skipped"  # will be updated below
             if "fail" in checks.values():
                 validation_status = "failed"
             elif any(checks.get(name) != "pass" for name in REQUIRED_READINESS_CHECKS):
@@ -390,17 +451,28 @@ def process_refinement_actions(
         for requirement in output["requirements"]
     ])
     diagnostic_by_id = {item["requirement_id"]: item for item in diagnostics}
+    final_peers = [{"requirement_id": r["requirement_id"], "text": r["final_text"]} for r in output["requirements"]]
     for requirement in output["requirements"]:
         requirement_id = str(requirement["requirement_id"])
         consistency = consistency_for_requirement(requirement_id, final_analysis)
         final_text = requirement.get("final_text", requirement.get("original_text"))
         final_findings = analyse_requirement(final_text)
-        final_grounding = analyse_grounding(final_text, srs_text)
+        record = workflow_records.get(requirement_id) if workflow_records else None
+        evaluation = _evaluate_candidate(final_text, srs_text, requirement["original_text"], record)
+        final_grounding = evaluation["grounding"]
+        resolution = clarification_resolution(record, requirement["original_text"], list(requirement.get("clarification_questions") or []))
+        unresolved = resolution["unresolved_questions"]
+        if record and record.get("clarification_requested"):
+            unresolved = unresolved + ["Explicit clarification review is still requested."]
+        baseline_tier = next(r["tier"] for r in baseline_requirements if r["requirement_id"] == requirement_id)
+        escalation = bool(record.get("escalation_active") if record else baseline_tier == "TIER_3_ESCALATE")
         tier_options = (
-            {"original_text": requirement["original_text"], "candidate_text": final_text}
+            {"original_text": requirement["original_text"], "candidate_text": final_text,
+             "human_reviewed": requirement["human_decision"] in ACCEPTED_DECISIONS and not unresolved and not escalation}
             if final_text != requirement["original_text"] else {}
         )
-        tier = classify_tier(final_findings, final_grounding, consistency, **tier_options)
+        tier = classify_tier(final_findings, final_grounding, consistency,
+                             unresolved_clarification=bool(unresolved), **tier_options)
         requirement["tier"] = tier["tier"]
         requirement["consistency"] = {
             "status": consistency["status"],
@@ -409,27 +481,91 @@ def process_refinement_actions(
         }
         validation = requirement.setdefault("validation", {})
         checks = validation.setdefault("checks", {})
+        # Every final-text/decision transition replaces all dependent fields.
+        requirement["defects"] = evaluation["quality_findings"]
+        requirement["grounding"] = {"status": final_grounding["status"], "evidence": final_grounding["evidence"]}
+        checks["quality"] = evaluation["quality_check"]
+        checks["grounding"] = evaluation["grounding_check"]
         checks["consistency"] = consistency["check"]
+        # Now that consistency is resolved, compute the definitive BDD-readiness
+        # result using all four upstream check values and the current tier.
+        bdd_result = bdd_check_from_validation(
+            final_text,
+            checks,
+            tier=tier["tier"],
+            clarification_questions=unresolved,
+            consistency_result=consistency,
+            escalation_active=escalation,
+        )
+        checks["bdd_readiness"] = bdd_result["check"]
+        consistency_satisfied = (
+            checks.get("consistency") == "pass"
+            or (
+                checks.get("consistency") == "skipped"
+                and is_single_requirement_no_peers(consistency)
+            )
+        )
         if "fail" in checks.values():
             validation["status"] = "failed"
-        elif all(checks.get(name) == "pass" for name in REQUIRED_READINESS_CHECKS):
+        elif (
+            checks.get("quality") == "pass"
+            and checks.get("grounding") == "pass"
+            and checks.get("bdd_readiness") == "pass"
+            and consistency_satisfied
+        ):
             validation["status"] = "passed"
         else:
             validation["status"] = "needs_review"
         requirement["bdd_ready"] = can_mark_bdd_ready(
-            validation["status"], checks, requirement.get("human_decision", "pending")
+            validation["status"],
+            checks,
+            requirement.get("human_decision", "pending"),
+            consistency_result=consistency,
         )
         if requirement_id in diagnostic_by_id:
+            diagnostic = diagnostic_by_id[requirement_id]
+            diagnostic["candidate_pre_action_assessments"] = copy.deepcopy(diagnostic["candidates"])
+            # Current candidate diagnostics use the complete final peer set,
+            # not stale pre-action peers from an earlier snapshot.
+            for candidate in diagnostic["candidates"]:
+                candidate_evaluation = _evaluate_candidate(candidate["text"], srs_text, requirement["original_text"], record)
+                candidate_consistency = _consistency_with_candidate(requirement_id, candidate["text"], output["requirements"])
+                candidate_tier = classify_tier(
+                    candidate_evaluation["quality_findings"], candidate_evaluation["grounding"], candidate_consistency,
+                    original_text=requirement["original_text"], candidate_text=candidate["text"],
+                    human_reviewed=(requirement["human_decision"] in ACCEPTED_DECISIONS
+                                    and candidate["candidate_id"] == requirement.get("selected_candidate_id")
+                                    and not unresolved and not escalation),
+                    unresolved_clarification=bool(unresolved),
+                )
+                candidate_validation = _candidate_validation(
+                    candidate_evaluation, candidate_consistency, text=candidate["text"], tier=candidate_tier["tier"],
+                    clarification_questions=unresolved + clarification_questions_for(candidate["text"]),
+                    escalation_active=escalation,
+                )
+                candidate.update(**candidate_evaluation, consistency=candidate_consistency, tier=candidate_tier,
+                                 validation=candidate_validation, bdd_readiness=candidate_validation["bdd_readiness"],
+                                 validation_signature=validation_signature(candidate["text"], requirement, srs_text, final_peers, record),
+                                 comparison_basis="current_final_peer_set")
+            blockers = [
+                name for name in ("quality", "grounding", "bdd_readiness")
+                if checks.get(name) != "pass"
+            ]
+            if not consistency_satisfied:
+                blockers.append("consistency")
+            diagnostic_by_id[requirement_id]["readiness_blockers"] = blockers
             diagnostic_by_id[requirement_id]["consistency"] = consistency
             diagnostic_by_id[requirement_id]["tier"] = tier
+            diagnostic_by_id[requirement_id]["clarification_resolution"] = resolution
+            diagnostic_by_id[requirement_id]["grounding_categories"] = final_grounding
+            diagnostic_by_id[requirement_id]["validation_signature"] = validation_signature(
+                final_text, requirement, srs_text, final_peers, record,
+            )
             diagnostic_by_id[requirement_id]["bdd_readiness"] = {
-                "check": checks.get("bdd_readiness", "skipped"),
+                "check": bdd_result["check"],
                 "bdd_ready": requirement["bdd_ready"],
-                "explanation": (
-                    "No approved C1 BDD-readiness criteria are defined; the check remains skipped."
-                    if checks.get("bdd_readiness") != "pass"
-                    else "All required validation checks and the human-decision gate passed."
-                ),
+                "reasons": bdd_result["reasons"],
+                "explanation": bdd_result["explanation"],
             }
     for diagnostic in diagnostics:
         diagnostic["consistency_analysis"] = final_analysis
