@@ -407,13 +407,27 @@ def generate_candidate_suggestions(
     workflow_blocked_ids: set[str] | None = None,
     workflow_rejected_ids: set[str] | None = None,
     workflow_records: dict[str, Any] | None = None,
+    consistency_context: dict[str, Any] | None = None,
+    requirement_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Generate requirement rewrite candidate suggestions into a sidecar artifact."""
+    if grounding_mode != "lexical":
+        raise ValueError("Candidate validation supports only lexical grounding; RAG is available for run and advisory verification")
     if backend is None:
         backend = DeterministicSubstitutionBackend()
 
     answers_input = clarification_answers or []
     all_requirements = artifact.get("requirements", [])
+    selected = None
+    if requirement_ids is not None:
+        if (not isinstance(requirement_ids, list) or not requirement_ids
+                or any(not isinstance(rid, str) for rid in requirement_ids)
+                or len(set(requirement_ids)) != len(requirement_ids)
+                or not set(requirement_ids) <= {r["requirement_id"] for r in all_requirements}):
+            raise ValueError("Select unique requirement IDs from the active artifact")
+        selected = set(requirement_ids)
+        if any("requirement_id" not in item for item in answers_input):
+            raise ValueError("Selected generation requires requirement-scoped clarification answers")
     run_id = artifact.get("run_id", "RUN-UNKNOWN")
     source_document = artifact.get("source_document", {})
 
@@ -431,6 +445,8 @@ def generate_candidate_suggestions(
 
     for req in all_requirements:
         req_id = req.get("requirement_id", "")
+        if selected is not None and req_id not in selected:
+            continue
         orig_text = req.get("original_text", "")
         orig_defects = req.get("defects", [])
         orig_tier_label = _get_tier_classification(req.get("tier"))
@@ -486,6 +502,12 @@ def generate_candidate_suggestions(
                         "grounding_mode": "lexical",
                     })
 
+        if selected is not None:
+            # Broad evidence chunks may include other requirements. Transmit only
+            # this selected source statement; peer checks still use the full local set.
+            evidence_chunks = ([{"chunk_id": f"SRS-{req_id}", "text": orig_text,
+                                 "source": "lexical", "grounding_mode": "lexical"}]
+                               if orig_text in srs_text else [])
         proposals = backend.generate(
             orig_text,
             orig_defects,
@@ -537,7 +559,8 @@ def generate_candidate_suggestions(
             record = workflow_records.get(req_id) if workflow_records else generation_record(
                 req_id, orig_text, req.get("clarification_questions", []), req_answers,
             )
-            evaluation = _evaluate_candidate(cand_text, srs_text, orig_text, record)
+            evaluation = _evaluate_candidate(cand_text, srs_text, orig_text, record,
+                source_format="docx" if source_document.get("name", "").lower().endswith(".docx") else None)
             cand_findings = evaluation.get("quality_findings", [])
             cand_defect_types = {f.get("type") for f in cand_findings if f.get("type")}
 
@@ -566,7 +589,7 @@ def generate_candidate_suggestions(
                 continue
 
             # 2. Consistency Analysis against peer requirements
-            consistency_res = _consistency_with_candidate(req_id, cand_text, all_requirements)
+            consistency_res = _consistency_with_candidate(req_id, cand_text, all_requirements, workflow_records, consistency_context)
             consistency_status = consistency_res.get("status")
 
             # Hard Veto: Confirmed conflict
@@ -704,8 +727,14 @@ def generate_candidates_run(
     *,
     clarification_answers_path: Path | None = None,
     grounding_mode: str = "lexical",
+    backend: GeneratorBackend | None = None,
+    requirement_ids: list[str] | None = None,
 ) -> None:
     """CLI handler for c1 generate-candidates subcommand."""
+    if grounding_mode != "lexical":
+        raise ValueError("Candidate validation supports only lexical grounding; RAG is available for run and advisory verification")
+    if out_path.exists():
+        raise FileExistsError(f"Candidate output already exists: {out_path}")
     for path, label in ((input_path, "validated requirements"), (srs_path, "SRS")):
         if not path.is_file():
             raise FileNotFoundError(f"{label} file not found: {path}")
@@ -713,7 +742,7 @@ def generate_candidates_run(
     raw_input_bytes = input_path.read_bytes()
     artifact = json.loads(raw_input_bytes.decode("utf-8-sig"))
 
-    from c1_requirement_quality.cli import _validate_contract_artifact
+    from c1_requirement_quality.contract import validate_contract_artifact as _validate_contract_artifact
 
     _validate_contract_artifact(artifact)
 
@@ -721,6 +750,7 @@ def generate_candidates_run(
 
     srs_text, _source_manifest = verify_source(input_path, srs_path)
     from c1_requirement_quality.workflow_persistence import load_state, current_answer_actions
+    from c1_requirement_quality.effective_consistency import context_from_state
     workflow_state, _ = load_state(input_path, srs_path)
 
     clarification_answers: list[dict[str, Any]] = []
@@ -744,11 +774,19 @@ def generate_candidates_run(
         srs_text,
         clarification_answers=clarification_answers,
         grounding_mode=grounding_mode,
+        backend=backend,
+        requirement_ids=requirement_ids,
         workflow_blocked_ids={rid for rid, record in workflow_state["requirements"].items() if record["escalation_active"]},
         workflow_rejected_ids={cid for record in workflow_state["requirements"].values()
                                for cid, candidate in record["candidates"].items() if candidate["status"] == "REJECTED"},
         workflow_records=workflow_state["requirements"] if clarification_answers_path is None else None,
+        consistency_context=context_from_state(workflow_state) if clarification_answers_path is None else None,
     )
+
+    import hashlib
+    sidecar["input_sha256"] = hashlib.sha256(raw_input_bytes).hexdigest()
+    sidecar["source_sha256"] = _source_manifest["sha256"]
+    sidecar["workflow_sha256"] = _source_manifest.get("workflow_sha256")
 
     after_bytes = input_path.read_bytes()
     if after_bytes != raw_input_bytes:
@@ -768,4 +806,5 @@ def generate_candidates_run(
         stream.write("\n")
     # Hard-link publication is exclusive even if another writer races us.
     os.link(name, out_path)
+    Path(name).unlink()  # only this invocation's successfully published hard link
     print(f"[c1] wrote candidate suggestions to {out_path}")

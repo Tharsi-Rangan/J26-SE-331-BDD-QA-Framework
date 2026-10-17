@@ -21,7 +21,6 @@ dependencies = [
 dev = ["pytest>=8"]
 rag = [
   "sentence-transformers>=3.0",
-  "faiss-cpu>=1.8",
   "spacy>=3.7",
   "transformers>=4.40",
   "torch>=2.2",
@@ -33,6 +32,9 @@ c1 = "c1_requirement_quality.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+c1_requirement_quality = ["sample_srs.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

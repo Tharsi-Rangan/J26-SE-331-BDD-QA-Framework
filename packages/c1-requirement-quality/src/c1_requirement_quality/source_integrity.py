@@ -24,14 +24,18 @@ def document_identity(source: Path, explicit: str | None = None) -> str:
     return "DOC-" + sha256(str(source.resolve()).casefold().encode("utf-8"))
 
 
-def snapshot_source(c1_dir: Path, source: Path, document_id: str) -> tuple[NIRDocument, dict[str, Any]]:
+def snapshot_source(c1_dir: Path, source: Path, document_id: str, *, stage_progress=None) -> tuple[NIRDocument, dict[str, Any]]:
     """Read original bytes once, then ingest the immutable local snapshot."""
+    if stage_progress: stage_progress("read", "running", "")
     raw = source.read_bytes()
     archived = c1_dir / "internal" / "source" / source.name
     archived.parent.mkdir(parents=True, exist_ok=True)
     with archived.open("xb") as stream:
         stream.write(raw)
     archived.chmod(0o444)
+    if stage_progress:
+        stage_progress("read", "completed", "Source bytes archived")
+        stage_progress("extract", "running", "")
     doc = replace(load_srs_document(archived), source_path=source.resolve())
     payload = asdict(doc)
     payload["source_path"] = str(doc.source_path)

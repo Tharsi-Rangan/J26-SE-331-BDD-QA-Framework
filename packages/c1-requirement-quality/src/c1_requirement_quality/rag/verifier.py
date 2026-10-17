@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
@@ -10,6 +9,8 @@ from typing import Any
 
 from c1_requirement_quality.rag.fact_extractor import Fact, extract_facts
 from c1_requirement_quality.rag.model_loading import RAGModelLoadError
+from c1_requirement_quality.model_paths import DEBERTA_NLI_MODEL_NAME, get_deberta_nli_cache_dir
+from c1_requirement_quality.lexical_patterns import COMPARISON_TOKEN_PATTERN
 
 
 class VerificationOutcome(str, Enum):
@@ -32,7 +33,7 @@ class VerificationResult:
 class LocalNLI:
     """Lazy local transformers NLI; loads cached weights only."""
 
-    def __init__(self, model_name: str = "cross-encoder/nli-deberta-v3-small") -> None:
+    def __init__(self, model_name: str = DEBERTA_NLI_MODEL_NAME) -> None:
         self.model_name = model_name
         self._pipeline: Any | None = None
 
@@ -48,15 +49,21 @@ class LocalNLI:
             except ImportError as err:
                 raise RAGModelLoadError("nli", self.model_name, err) from err
             try:
+                model_path = self.model_name
+                if self.model_name == DEBERTA_NLI_MODEL_NAME:
+                    directory = get_deberta_nli_cache_dir()
+                    if directory is None:
+                        raise FileNotFoundError("DeBERTa snapshot unavailable in configured local model/cache directories")
+                    model_path = str(directory)
                 self._pipeline = pipeline(
-                    "text-classification", model=self.model_name, tokenizer=self.model_name,
-                    local_files_only=True, device=-1,
+                    "text-classification", model=model_path, tokenizer=model_path,
+                    local_files_only=True, device="cpu",
                 )
             except Exception as err:
                 raise RAGModelLoadError("nli", self.model_name, err) from err
         return self._pipeline
 
-    def classify(self, premise: str, hypothesis: str) -> str:
+    def classify_with_diagnostics(self, premise: str, hypothesis: str) -> dict[str, Any]:
         result = self._load()(
             {"text": premise, "text_pair": hypothesis}, truncation=True
         )
@@ -65,11 +72,17 @@ class LocalNLI:
         prediction = result[0] if isinstance(result, list) else result
         if not isinstance(prediction, dict) or "label" not in prediction:
             raise RuntimeError("NLI model returned an unsupported classification format")
-        return str(prediction["label"]).lower()
+        return {
+            "label": str(prediction["label"]).lower(),
+            "score": float(prediction["score"]) if "score" in prediction else None,
+        }
+
+    def classify(self, premise: str, hypothesis: str) -> str:
+        return self.classify_with_diagnostics(premise, hypothesis)["label"]
 
 
 def _tokens(text: str) -> tuple[str, ...]:
-    return tuple(re.findall(r"\d+(?:\.\d+)?|[a-z]+(?:'[a-z]+)?", text.lower()))
+    return tuple(COMPARISON_TOKEN_PATTERN.findall(text.lower()))
 
 
 def _content_signature(text: str) -> tuple[str, ...]:

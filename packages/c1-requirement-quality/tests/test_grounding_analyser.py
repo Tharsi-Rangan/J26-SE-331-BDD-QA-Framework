@@ -1,4 +1,5 @@
 from c1_requirement_quality.grounding_analyser import analyse_grounding
+import pytest
 
 
 def test_fully_supported_claim_returns_exact_traceable_evidence():
@@ -141,3 +142,34 @@ def test_results_are_stable_across_repeated_runs():
     srs = "# Eligibility\nThe system shall verify the user's age.\n"
 
     assert analyse_grounding(candidate, srs) == analyse_grounding(candidate, srs)
+
+
+def test_docx_description_label_is_structural_only_in_complete_block():
+    source = "Functional Requirement 1\n\nTITLE: Retention\n\nDESC: The system shall retain logs for 30 days."
+    text = "The system shall retain logs for 30 days."
+    result = analyse_grounding(text, source, source_format="docx")
+    assert result["status"] == "supported"
+    assert result["evidence"][0]["text"] == "DESC: " + text
+    assert result["evidence"][0]["text"] in source
+    assert analyse_grounding(text, source)["status"] == "unsupported"
+    for unstructured in ["DESC: " + text, "TITLE: Retention\n\nDESC: " + text,
+                         "Functional Requirement 1\n\nNOTE: Retention\n\nDESC: " + text]:
+        assert analyse_grounding(text, unstructured, source_format="docx")["status"] == "unsupported"
+    assert analyse_grounding("The system shall retain logs for 90 days.", source, source_format="docx")["status"] != "supported"
+    assert analyse_grounding("The system shall not retain logs for 30 days.", source, source_format="docx")["status"] != "supported"
+
+
+def test_docx_multisentence_description_preserves_all_quotes_and_claim_checks():
+    text = "Users can register. The system shall send email."
+    source = "Functional Requirement 1\n\nTITLE: Registration\n\nDESC: " + text
+    result = analyse_grounding(text, source, source_format="docx")
+    assert result["status"] == "supported"
+    assert len(result["evidence"]) == 2
+    assert all(e["text"] in source for e in result["evidence"])
+    assert analyse_grounding(text + " The system shall charge a fee.", source, source_format="docx")["status"] == "partially_supported"
+@pytest.mark.parametrize("left,right", [("<", ">"), ("<=", ">="), ("=", "!="), ("≤", "≥")])
+def test_symbolic_comparisons_do_not_disappear(left, right):
+    source = f"The system shall respond in {left} 2 seconds."
+    candidate = f"The system shall respond in {right} 2 seconds."
+    assert analyse_grounding(candidate, source)["status"] != "supported"
+    assert analyse_grounding(source, source)["status"] == "supported"

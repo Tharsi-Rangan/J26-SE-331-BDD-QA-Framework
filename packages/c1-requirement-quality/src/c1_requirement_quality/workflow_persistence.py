@@ -190,6 +190,18 @@ def _validate_state(state: dict[str, Any], artifact: dict[str, Any], manifest: d
         raise ValueError("Workflow snapshot identity or requirement membership mismatch")
     events = {event["event_id"]: event for event in state["events"]}
     if len(events) != len(state["events"]): raise ValueError("Duplicate workflow event IDs")
+    from c1_requirement_quality.effective_consistency import validate_adopted
+    reviews = {}
+    for event in state["events"]:
+        if event["kind"] == "consistency_review_adopted":
+            review = event["payload"]
+            validate_adopted(review)
+            prior = reviews.get(review["pair_id"])
+            if review["supersedes"] != (prior["review_id"] if prior else None):
+                raise ValueError("Consistency review supersession mismatch")
+            if not set(review["requirement_ids"]) <= set(state["requirements"]):
+                raise ValueError("Consistency review references unknown requirements")
+            reviews[review["pair_id"]] = review
     for row in artifact["requirements"]:
         rid = row["requirement_id"]; record = state["requirements"][rid]
         if record["human_decision"] != row["human_decision"] or record["selected_candidate_id"] != row.get("selected_candidate_id"):
@@ -328,8 +340,10 @@ def current_answer_actions(state: dict[str, Any]) -> list[dict[str, Any]]:
 def refine_with_history(artifact: dict[str, Any], actions: dict[str, Any], source_text: str,
                         parent: dict[str, Any], parent_path: Path, final_c1_dir: Path,
                         manifest: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
-    if set(actions) != {"requirements"} or not isinstance(actions["requirements"], list):
-        raise ValueError("Actions must contain only a requirements list")
+    if (set(actions) - {"requirements", "consistency_reviews"} or "requirements" not in actions
+            or not isinstance(actions["requirements"], list)):
+        raise ValueError("Actions require requirements and optional consistency_reviews lists")
+    from c1_requirement_quality.effective_consistency import context_from_state, views, create_review, assess_all
     state = copy.deepcopy(parent)
     state.update(snapshot_id="SNAPSHOT-" + uuid.uuid4().hex, round=parent["round"] + 1,
                  parent={"snapshot_id": parent["snapshot_id"],
@@ -339,6 +353,22 @@ def refine_with_history(artifact: dict[str, Any], actions: dict[str, Any], sourc
     rows = {r["requirement_id"]: r for r in artifact["requirements"]}
     supplied = {}
     prepared = []
+    requests = actions.get("consistency_reviews", [])
+    if not isinstance(requests, list): raise ValueError("consistency_reviews must be a list")
+    if requests and actions["requirements"]:
+        raise ValueError("Record consistency reviews separately from requirement edits or approvals")
+    seen_pairs = set()
+    for request in requests:
+        if not isinstance(request, dict): raise ValueError("Invalid consistency review request")
+        ids = request.get("requirement_ids")
+        if (not isinstance(ids, list) or len(ids) != 2 or any(not isinstance(i, str) for i in ids)
+                or len(set(ids)) != 2): raise ValueError("Two distinct requirement IDs required")
+        matching = [v for v in views(list(rows.values()), state["requirements"], context_from_state(state))
+                    if v["requirement_ids"] == sorted(ids)]
+        if len(matching) != 1 or matching[0]["pair_id"] in seen_pairs: raise ValueError("Unknown or repeated pair")
+        seen_pairs.add(matching[0]["pair_id"])
+        review = create_review(matching[0], {k: v for k, v in request.items() if k != "requirement_ids"})
+        _event(state, ids[0], "consistency_review_adopted", review["reviewer"], review)
     for action in actions["requirements"]:
         if not isinstance(action, dict) or set(action) - BASE_FIELDS - EXTRA_FIELDS:
             raise ValueError("Unsupported workflow action fields")
@@ -434,8 +464,57 @@ def refine_with_history(artifact: dict[str, Any], actions: dict[str, Any], sourc
             _event(state, rid, work_action, actor, {"resolution": action.get("resolution"), "reason": action.get("reason")}, timestamp)
         if "human_decision" in action or work_action in aliases:
             _event(state, rid, "human_decision", actor, {"human_decision": translated["human_decision"], "candidate_id": selected}, timestamp)
+    review_context = context_from_state(state)
+    # Invalidate changed/stale bindings once, retaining immutable historical events.
+    invalidated = {e["payload"]["review_id"] for e in state["events"] if e["kind"] == "consistency_review_invalidated"}
+    current_views = {v["pair_id"]: v for v in views(list(rows.values()), state["requirements"], review_context)}
+    for review in review_context["history"]:
+        view = current_views.get(review["pair_id"])
+        if review["review_id"] not in invalidated and (not view or review["binding"] != view["binding"]):
+            _event(state, review["requirement_ids"][0], "consistency_review_invalidated", "system",
+                   {"review_id": review["review_id"], "reason": "Review binding changed"})
+    review_context = context_from_state(state)
+    assessments = assess_all(list(rows.values()), state["requirements"], review_context)
+    for action in prepared:
+        rid = action["requirement_id"]
+        basis = assessments[rid].get("review_basis")
+        previous_basis = parent["requirements"][rid].get("consistency_review_basis")
+        if basis != previous_basis and (basis is not None or previous_basis is not None):
+            if rows[rid]["human_decision"] in {"approved", "edited", "not_required"}:
+                action["human_decision"] = "pending"
+                _event(state, rid, "approval_invalidated", "system", {"reason": "Consistency review basis changed"})
+        if basis is not None: state["requirements"][rid]["consistency_review_basis"] = basis
     refined, diagnostics = process_refinement_actions(artifact, {"requirements": prepared}, source_text,
-                                                     workflow_records=state["requirements"])
+        workflow_records=state["requirements"], consistency_context=review_context)
+    # Re-evaluate after accepted edits change the final peer set. Reset stale
+    # approvals before publication, including approvals on the other endpoint.
+    for _ in range(len(rows) + 2):
+        changed = False
+        current_context = context_from_state(state)
+        final_views = {v["pair_id"]: v for v in views(refined["requirements"], state["requirements"], current_context)}
+        invalidated = {e["payload"]["review_id"] for e in state["events"] if e["kind"] == "consistency_review_invalidated"}
+        for review in current_context["history"]:
+            view = final_views.get(review["pair_id"])
+            if review["review_id"] not in invalidated and (not view or review["binding"] != view["binding"]):
+                _event(state, review["requirement_ids"][0], "consistency_review_invalidated", "system",
+                       {"review_id": review["review_id"], "reason": "Final peer text or evidence changed"})
+                changed = True
+        current_context = context_from_state(state)
+        reset = []
+        assessments = assess_all(refined["requirements"], state["requirements"], current_context)
+        for row in refined["requirements"]:
+            rid = row["requirement_id"]
+            basis = assessments[rid].get("review_basis")
+            previous_basis = state["requirements"][rid].get("consistency_review_basis")
+            if basis != previous_basis and row["human_decision"] in {"approved", "edited", "not_required"}:
+                reset.append({"requirement_id": rid, "human_decision": "pending"})
+                _event(state, rid, "approval_invalidated", "system", {"reason": "Final consistency review basis changed"})
+            if basis is not None: state["requirements"][rid]["consistency_review_basis"] = basis
+        if not changed and not reset: break
+        refined, diagnostics = process_refinement_actions(refined, {"requirements": reset}, source_text,
+            workflow_records=state["requirements"], consistency_context=current_context)
+    else:
+        raise ValueError("Consistency approval invalidation did not converge; snapshot not published")
     for row in refined["requirements"]:
         rid = row["requirement_id"]
         _sync_candidates(state, row)

@@ -7,6 +7,7 @@ from typing import Any, Sequence
 
 from c1_requirement_quality.rag.indexer import SRSChunk, SRSIndexer
 from c1_requirement_quality.rag.model_loading import RAGModelLoadError
+from c1_requirement_quality.model_paths import get_minilm_cache_dir
 
 DEFAULT_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
@@ -38,7 +39,7 @@ class RetrievalResult:
         return res
 
 
-def _cosine_similarity(vec_a: Sequence[float], vec_b: Sequence[float]) -> float:
+def cosine_similarity(vec_a: Sequence[float], vec_b: Sequence[float]) -> float:
     """Compute cosine similarity between two equal-length numeric vectors."""
     if len(vec_a) != len(vec_b):
         raise ValueError("Vector dimensions must match")
@@ -49,6 +50,10 @@ def _cosine_similarity(vec_a: Sequence[float], vec_b: Sequence[float]) -> float:
         return 0.0
     similarity = dot / (norm_a * norm_b)
     return max(0.0, min(1.0, float(similarity)))
+
+
+# Backward-compatibility alias
+_cosine_similarity = cosine_similarity
 
 
 class SentenceTransformersEmbedder:
@@ -72,19 +77,54 @@ class SentenceTransformersEmbedder:
             # RAG is local-only: never fetch weights during a run.
             try:
                 self._model = SentenceTransformer(
-                    self.model_name, local_files_only=True, device="cpu"
+                    str(get_minilm_cache_dir()) if self.model_name == DEFAULT_MODEL_NAME else self.model_name,
+                    local_files_only=True, device="cpu"
                 )
             except Exception as err:
                 raise RAGModelLoadError("embedding", self.model_name, err) from err
         return self._model
 
-    def encode(self, texts: list[str]) -> list[list[float]]:
+    def encode(self, texts: list[str], *, batch_size: int = 8) -> list[list[float]]:
         """Encode a list of text strings into dense vector embeddings."""
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size <= 0:
+            raise ValueError("batch_size must be a positive integer")
         if not texts:
             return []
         model = self._load_model()
-        embeddings = model.encode(texts, convert_to_numpy=True)
+        embeddings = model.encode(texts, convert_to_numpy=True, batch_size=batch_size)
         return [list(map(float, vec)) for vec in embeddings]
+
+    def encode_with_diagnostics(self, texts: list[str], *, batch_size: int = 8) -> dict[str, Any]:
+        """Encode bounded batches and report tokenizer truncation when measurable.
+
+        Counts include special tokens. Unknown metadata is explicit, never a
+        claim that the complete text was embedded. No alternative model is loaded.
+        """
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size <= 0:
+            raise ValueError("batch_size must be a positive integer")
+        if any(not isinstance(text, str) or not text.strip() for text in texts):
+            raise ValueError("texts must contain non-empty strings")
+        vectors, diagnostics = [], []
+        for offset in range(0, len(texts), batch_size):
+            batch = texts[offset:offset + batch_size]
+            vectors.extend(self.encode(batch, batch_size=batch_size))
+            model = self._model
+            limit = getattr(model, "max_seq_length", None)
+            limit = limit if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0 else None
+            tokenizer = getattr(model, "tokenizer", None)
+            for text in batch:
+                count = None
+                encode = getattr(tokenizer, "encode", None)
+                if callable(encode):
+                    try:
+                        ids = encode(text, add_special_tokens=True, truncation=False)
+                    except (NotImplementedError, TypeError):
+                        ids = None
+                    if isinstance(ids, list) and all(isinstance(i, int) for i in ids):
+                        count = len(ids)
+                diagnostics.append({"input_tokens": count, "token_limit": limit,
+                                    "truncated": count > limit if count is not None and limit is not None else None})
+        return {"embeddings": vectors, "diagnostics": diagnostics}
 
 
 class DenseRetriever:
