@@ -52,6 +52,11 @@ def snapshot_source(c1_dir: Path, source: Path, document_id: str) -> tuple[NIRDo
 def seal_source(c1_dir: Path, manifest: dict[str, Any]) -> None:
     """Bind the source snapshot to this exact validated contract artifact."""
     manifest = dict(manifest, artifact_sha256=sha256((c1_dir / "validated_requirements.json").read_bytes()))
+    workflow = c1_dir / "internal" / "workflow_snapshot.json"
+    if workflow.exists():
+        manifest["workflow_sha256"] = sha256(workflow.read_bytes())
+    else:
+        manifest.pop("workflow_sha256", None)
     path = c1_dir / "internal" / "source_manifest.json"
     with path.open("x", encoding="utf-8") as stream:
         json.dump(manifest, stream, indent=2, ensure_ascii=False)
@@ -81,6 +86,10 @@ def verify_source(input_path: Path, supplied_source: Path) -> tuple[str, dict[st
     normalized = (internal / "normalized_ingestion.json").read_bytes()
     if sha256(normalized) != manifest["normalized_sha256"]:
         raise ValueError("Normalized ingestion hash mismatch")
+    if "workflow_sha256" in manifest:
+        workflow = internal / "workflow_snapshot.json"
+        if not workflow.is_file() or sha256(workflow.read_bytes()) != manifest["workflow_sha256"]:
+            raise ValueError("Workflow snapshot hash mismatch")
     artifact = json.loads(input_path.read_text(encoding="utf-8-sig"))
     if artifact.get("source_document", {}).get("name") != filename:
         raise ValueError("Artifact source filename does not match its manifest")
@@ -88,7 +97,8 @@ def verify_source(input_path: Path, supplied_source: Path) -> tuple[str, dict[st
     return payload["raw_text"], manifest
 
 
-def copy_source_bundle(input_path: Path, c1_dir: Path, manifest: dict[str, Any]) -> None:
+def copy_source_bundle(input_path: Path, c1_dir: Path, manifest: dict[str, Any],
+                       workflow_state: dict[str, Any] | None = None) -> None:
     """Carry original bytes/NIR unchanged to the new refinement snapshot."""
     old = input_path.parent / "internal"
     target = c1_dir / "internal"
@@ -98,4 +108,7 @@ def copy_source_bundle(input_path: Path, c1_dir: Path, manifest: dict[str, Any])
         with path.open("xb") as stream:
             stream.write((old / relative).read_bytes())
         path.chmod(0o444)
+    if workflow_state is not None:
+        from c1_requirement_quality.workflow_persistence import write_state
+        write_state(c1_dir, workflow_state)
     seal_source(c1_dir, manifest)

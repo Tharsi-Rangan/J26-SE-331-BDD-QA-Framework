@@ -19,7 +19,9 @@ from c1_requirement_quality.requirement_registry import RequirementRegistry
 from c1_requirement_quality.source_integrity import (
     document_identity, snapshot_source, seal_source, verify_source, copy_source_bundle,
 )
-from c1_requirement_quality.refinement import process_refinement_actions
+from c1_requirement_quality.workflow_persistence import (
+    initial_state, write_state, load_state, refine_with_history,
+)
 from c1_requirement_quality.severity_priority import assess_defects
 from c1_requirement_quality.tier_classifier import classify_tier
 from c1_requirement_quality.rag.rag_grounding_analyser import RAGGroundingAnalyser
@@ -67,6 +69,24 @@ def build_parser() -> argparse.ArgumentParser:
     refine_parser.add_argument("--actions", required=True, help="JSON file with candidate and decision actions")
     refine_parser.add_argument("--out", required=True, help="new output folder; must not already exist")
 
+    gen_parser = sub.add_parser(
+        "generate-candidates",
+        help="generate evidence-grounded candidate rewrites into a sidecar",
+    )
+    gen_parser.add_argument("--in", dest="input_path", required=True, help="validated_requirements.json")
+    gen_parser.add_argument("--srs", required=True, help="source SRS file")
+    gen_parser.add_argument("--out", required=True, help="path for candidate_suggestions.json output sidecar")
+    gen_parser.add_argument(
+        "--clarification-answers",
+        dest="clarification_answers",
+        help="JSON file containing user-supplied clarification answers",
+    )
+    gen_parser.add_argument(
+        "--grounding-mode",
+        choices=("lexical", "rag"),
+        default="lexical",
+        help="grounding mode (default: lexical)",
+    )
     return parser
 
 
@@ -99,7 +119,10 @@ def refine_run(input_path: Path, srs: Path, actions_path: Path, out: Path) -> No
     actions = json.loads(actions_path.read_text(encoding="utf-8-sig"))
     _validate_contract_artifact(artifact)
     srs_text, manifest = verify_source(input_path, srs)
-    refined, diagnostics = process_refinement_actions(artifact, actions, srs_text)
+    parent_state, _ = load_state(input_path, srs)
+    refined, diagnostics, workflow_state = refine_with_history(
+        artifact, actions, srs_text, parent_state, input_path, out / "c1", manifest,
+    )
     _validate_contract_artifact(refined)
 
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -112,13 +135,17 @@ def refine_run(input_path: Path, srs: Path, actions_path: Path, out: Path) -> No
     (c1_dir / "refinement_diagnostics.json").write_text(
         json.dumps(diagnostics, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
-    copy_source_bundle(input_path, c1_dir, manifest)
+    copy_source_bundle(input_path, c1_dir, manifest, workflow_state)
     _validate_contract_artifact(json.loads((c1_dir / "validated_requirements.json").read_text(encoding="utf-8")))
     verify_source(c1_dir / "validated_requirements.json", srs)
+    # Parent integrity is checked again before publication; it remains immutable.
+    load_state(input_path, srs)
     staging.rename(out)
     c1_dir = out / "c1"
     print(f"[c1] wrote refined requirements to {c1_dir / 'validated_requirements.json'}")
     print(f"[c1] wrote refinement diagnostics to {c1_dir / 'refinement_diagnostics.json'}")
+    for rid, record in workflow_state["requirements"].items():
+        print(f"[c1] {rid}: {record['workflow_status']} ({len(record['unanswered_question_ids'])} unanswered questions)")
 
 
 def _run_staged(
@@ -355,6 +382,7 @@ def _run_staged(
         json.dumps(validated_requirements, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
+    write_state(c1_dir, initial_state(validated_requirements, manifest))
     seal_source(c1_dir, manifest)
 
 
@@ -404,6 +432,17 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "refine":
             refine_run(
                 Path(args.input_path), Path(args.srs), Path(args.actions), Path(args.out)
+            )
+            return 0
+        if args.command == "generate-candidates":
+            from c1_requirement_quality.rewrite_generator import generate_candidates_run
+
+            generate_candidates_run(
+                Path(args.input_path),
+                Path(args.srs),
+                Path(args.out),
+                clarification_answers_path=Path(args.clarification_answers) if args.clarification_answers else None,
+                grounding_mode=args.grounding_mode,
             )
             return 0
         run(
