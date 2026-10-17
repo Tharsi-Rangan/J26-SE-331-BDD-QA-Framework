@@ -116,7 +116,7 @@ def test_injected_truncation_is_unknown():
     assert all(row["embedding_diagnostics"]["truncated"] is None for row in report["requirements"])
 
 
-def test_existing_adapter_batches_and_reports_truncation_using_fake_model(monkeypatch):
+def test_existing_adapter_batches_and_reports_truncation_using_fake_model(monkeypatch, tmp_path):
     calls, constructors = [], []
     class FakeModel:
         max_seq_length = 3
@@ -131,10 +131,13 @@ def test_existing_adapter_batches_and_reports_truncation_using_fake_model(monkey
 
     # Exercise the real local-only loader with a fake library, never real weights.
     monkeypatch.undo()
+    snapshot = tmp_path / "hf-cache" / "snapshots" / "fake-local-revision"
+    snapshot.mkdir(parents=True)
+    monkeypatch.setattr("c1_requirement_quality.rag.retriever.get_minilm_cache_dir", lambda: snapshot)
     monkeypatch.setitem(sys.modules, "sentence_transformers", SimpleNamespace(SentenceTransformer=FakeModel))
     encoder = SentenceTransformersEmbedder()
     report = requirement_pair_diagnostics(rows("A", "B C", "D"), embedder=encoder, batch_size=2)
-    assert constructors == [(encoder.model_name, {"local_files_only": True, "device": "cpu"})]
+    assert constructors == [(str(snapshot), {"local_files_only": True, "device": "cpu"})]
     assert [len(batch) for batch, _ in calls] == [2, 1]
     assert all(kwargs["batch_size"] == 2 for _, kwargs in calls)
     assert [r["embedding_diagnostics"]["truncated"] for r in report["requirements"]] == [False, True, False]

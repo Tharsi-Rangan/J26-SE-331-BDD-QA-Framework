@@ -205,6 +205,8 @@ class DistilBertDefectClassifier:
                          for name in EXPERIMENT2_FILES
                          for stat in [(self.model_dir / name).stat()])
         except OSError as err:
+            # Preserve the checkpoint validator's actionable missing-asset diagnostics.
+            self.validate_checkpoint()
             raise DistilBertModelLoadError(self.model_dir, err) from err
 
     def validate_checkpoint(self) -> dict[str, Any]:

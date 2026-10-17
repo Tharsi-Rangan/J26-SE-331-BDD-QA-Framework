@@ -162,6 +162,7 @@ def test_missing_checkpoint_directory_raises_clear_error(tmp_path):
 
     assert "does not exist or is not a directory" in str(exc_info.value)
     assert str(nonexistent) in str(exc_info.value)
+    assert isinstance(exc_info.value.__cause__, ValueError)
 
 
 def test_missing_model_files_raises_clear_error(tmp_path):
@@ -177,6 +178,7 @@ def test_missing_model_files_raises_clear_error(tmp_path):
         classifier.classify("The system shall do X.")
 
     assert "missing required checkpoint file: model.safetensors" in str(exc_info.value)
+    assert isinstance(exc_info.value.__cause__, ValueError)
 
 
 def test_batch_classification():
