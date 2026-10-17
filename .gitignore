@@ -12,3 +12,11 @@ coverage/
 *.egg-info/
 .DS_Store
 Thumbs.db
+
+
+# Local C1 state and temporary test artifacts
+.c1-state/
+.pytest-tmp/
+packages/c1-requirement-quality/.c1-state/
+packages/c1-requirement-quality/.pytest-tmp/
+packages/c1-requirement-quality/test-stable-ids.md

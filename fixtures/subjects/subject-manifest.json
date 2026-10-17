@@ -3,15 +3,52 @@
   "schema_version": "1.0.0",
   "subjects": [
     {
-      "subject_id": "SUB-PILOT-1",
-      "project": "TODO-bugsjs-project",
-      "project_code": "PILOTA",
-      "source": { "kind": "bugsjs", "bug_id": "TODO", "buggy_ref": "TODO", "fixed_ref": "TODO" },
-      "module_path": "TODO/path/to/module.js",
-      "exports": ["TODO"],
+      "subject_id": "SUB-EXPRESS-5",
+      "project": "express",
+      "project_code": "EXPRESS",
+      "source": {
+        "kind": "bugsjs",
+        "bug_id": "Express-5",
+        "buggy_ref": "999546dfdeb874c20b360ad58346ed07917f3ac0",
+        "fixed_ref": "23b858835036e728006a69b5895775d5f1f8b459"
+      },
+      "module_path": "lib/utils.js",
+      "exports": ["isAbsolute", "normalizeType", "normalizeTypes", "setCharset", "compileETag", "compileTrust"],
       "module_system": "commonjs",
-      "requirement_ids": ["REQ-PILOTA-001"],
-      "notes": "Template. Fill in by Sat 3 Oct (task SH-03). Add SUB-PILOT-2 and SUB-PILOT-3."
+      "requirement_ids": ["REQ-EXPRESS-001"],
+      "notes": "buggy_ref = tag Bug-5, fixed_ref = tag Bug-5-full (fix + tests). Bug: isAbsolute('c:/') returns false. Own tests: Mocha 2.5, test/utils.js. requirement_ids is a placeholder until C1-02."
+    },
+    {
+      "subject_id": "SUB-HESSIAN-8",
+      "project": "hessian.js",
+      "project_code": "HESSIAN",
+      "source": {
+        "kind": "bugsjs",
+        "bug_id": "Hessian.js-8",
+        "buggy_ref": "dd8a485d524c96d20b0384e7d81da3ff9b3bfd16",
+        "fixed_ref": "7de3320106f412a2f6afaa1eb7e3b550b9fcb094"
+      },
+      "module_path": "lib/utils.js",
+      "exports": ["handleLong", "getSerializer", "isJavaObject", "lengthOfUTF8"],
+      "module_system": "commonjs",
+      "requirement_ids": ["REQ-HESSIAN-001"],
+      "notes": "buggy_ref = tag Bug-8, fixed_ref = tag Bug-8-full. Bug: handleLong returns a number outside the safe-integer range. The fix also needs long ~3.0.1. Own tests: Mocha (pin it), test/v1.test.js. requirement_ids is a placeholder until C1-02."
+    },
+    {
+      "subject_id": "SUB-SHIELDS-4",
+      "project": "shields",
+      "project_code": "SHIELDS",
+      "source": {
+        "kind": "bugsjs",
+        "bug_id": "Shields-4",
+        "buggy_ref": "e588bef199aa34be8e858029a63e46a2fd82f73e",
+        "fixed_ref": "c6dc6151a5e2c9fc3e1a32094687f99103a83f6d"
+      },
+      "module_path": "lib/make-badge.js",
+      "exports": ["makeBadge"],
+      "module_system": "commonjs",
+      "requirement_ids": ["REQ-SHIELDS-001"],
+      "notes": "buggy_ref = tag Bug-4, fixed_ref = tag Bug-4-full. Bug: for-the-badge template fails on number text. Own tests: Mocha 4 with --exit, lib/make-badge.spec.js (3 tests only). requirement_ids is a placeholder until C1-02."
     }
   ]
 }
