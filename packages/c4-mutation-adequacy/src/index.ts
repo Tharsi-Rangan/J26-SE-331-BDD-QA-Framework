@@ -1,29 +1,34 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { RunOptions } from './args.js';
+import { embedderFromEnv } from './embedding.js';
 import { findEquivalentMutants } from './equivalent.js';
-import { loadInputs } from './loader.js';
+import { loadInputs, loadScenarioMetadata } from './loader.js';
 import { buildReport, writeReport, type AdequacyReport } from './report.js';
 import { aggregateScores, type Scores } from './scores.js';
+import { applyTraceSignal, traceTexts } from './signal.js';
 import { runStryker } from './stryker.js';
 import { buildSurvivors, testsByStrykerId, unmatchedTestNames, type Survivor } from './trace.js';
 
 export type { RunOptions } from './args.js';
 export { findEquivalentMutants } from './equivalent.js';
-export { loadInputs } from './loader.js';
+export { loadInputs, loadScenarioMetadata } from './loader.js';
 export { buildReport, writeReport } from './report.js';
 export { aggregateScores } from './scores.js';
+export { applyTraceSignal, traceTexts } from './signal.js';
 export { runStryker } from './stryker.js';
 export { buildSurvivors, testsByStrykerId, traceMutant } from './trace.js';
 
 /**
  * Requirement-Traceable Mutation Adequacy Attribution.
  * Done so far: loader (C4-03), StrykerJS run (C4-02), scores (C4-04), equivalent filter (C4-05)
- * and traces (C4-06).
+ * traces (C4-06) and trace-signal modes (C4-07).
  */
 export async function run(options: RunOptions): Promise<AdequacyReport> {
   if (!options.in) throw new Error('Missing --in <run folder>');
   const inputs = loadInputs(options.in, options.subjectRoot);
+  const embedding = options.traceSignal === 'coverage_only' ? undefined : embedderFromEnv();
+  const texts = embedding ? traceTexts(loadScenarioMetadata(options.in)) : undefined;
   console.log(
     `[c4] ${inputs.manifest.tests.length} tests for ${inputs.subject.subject_id}; mutating ${inputs.mutate.join(', ')}`,
   );
@@ -47,11 +52,29 @@ export async function run(options: RunOptions): Promise<AdequacyReport> {
 
   const equivalentIds = new Set(equivalent.map((e) => e.mutant_id));
   const scores = aggregateScores(mutation, tests, inputs.subject.requirement_ids, equivalentIds);
-  const survivors = buildSurvivors(mutation, testsByStrykerId(mutation, tests), equivalentIds);
+  const coverageSurvivors = buildSurvivors(
+    mutation,
+    testsByStrykerId(mutation, tests),
+    equivalentIds,
+  );
+  const survivors =
+    embedding && texts
+      ? await applyTraceSignal(
+          coverageSurvivors,
+          options.traceSignal,
+          mutation,
+          texts,
+          embedding.embed,
+        )
+      : coverageSurvivors;
+  console.log(`[c4] trace signal ${options.traceSignal}`);
   printScores(scores);
   printSurvivors(survivors);
 
-  const report = buildReport(inputs, strykerVersion, scores, survivors);
+  const report = buildReport(inputs, strykerVersion, scores, survivors, new Date(), {
+    mode: options.traceSignal,
+    embeddingModel: embedding?.model,
+  });
   console.log(`[c4] wrote ${writeReport(report, options.out)}`);
   return report;
 }

@@ -62,3 +62,9 @@ export interface MutationReport {
   testFiles?: Record<string, { tests: { id: string; name: string }[] }>;
   framework?: { name: string; version: string };
 }
+
+/** The parts of `c2/scenario_metadata.json` that the embedding trace signal reads. */
+export interface ScenarioMetadata {
+  features: { requirement_id: string; feature_name: string; requirement_text_used?: string }[];
+  scenarios: { scenario_id: string; requirement_id: string; scenario_name: string }[];
+}

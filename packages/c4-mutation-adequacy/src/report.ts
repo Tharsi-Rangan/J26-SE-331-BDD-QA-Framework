@@ -3,6 +3,7 @@ import path from 'node:path';
 import { assertMatchesSchema } from './contracts.js';
 import type { C4Inputs } from './loader.js';
 import type { RequirementScore, Scores } from './scores.js';
+import type { TraceSignalMode } from './signal.js';
 import type { Survivor } from './trace.js';
 
 export const REPORT_SCHEMA_VERSION = '1.0.0';
@@ -22,10 +23,11 @@ export interface AdequacyReport {
   upstream: { contract: string; path: string; schema_version: string }[];
   subject_id: string;
   config: {
-    trace_signal: 'coverage_only' | 'embedding_assisted' | 'full';
+    trace_signal: TraceSignalMode;
     stryker_version: string;
     coverage_analysis: 'perTest';
     mutate: string[];
+    embedding_model?: string;
   };
   summary: Omit<Scores['summary'], 'other'>;
   requirements: RequirementScore[];
@@ -40,6 +42,7 @@ export function buildReport(
   scores: Scores,
   survivors: Survivor[],
   generatedAt = new Date(),
+  signal: { mode: TraceSignalMode; embeddingModel?: string } = { mode: 'coverage_only' },
 ): AdequacyReport {
   const { other: _other, ...summary } = scores.summary;
   return {
@@ -57,10 +60,11 @@ export function buildReport(
     ],
     subject_id: inputs.subject.subject_id,
     config: {
-      trace_signal: 'coverage_only',
+      trace_signal: signal.mode,
       stryker_version: strykerVersion,
       coverage_analysis: 'perTest',
       mutate: inputs.mutate,
+      ...(signal.embeddingModel !== undefined && { embedding_model: signal.embeddingModel }),
     },
     summary,
     requirements: scores.requirements,
