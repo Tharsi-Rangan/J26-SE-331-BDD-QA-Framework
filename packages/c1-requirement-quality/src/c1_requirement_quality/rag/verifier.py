@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
+from numbers import Real
 from typing import Any
+import math
 import re
 
 from c1_requirement_quality.rag.fact_extractor import Fact, extract_facts
@@ -76,9 +78,18 @@ class LocalNLI:
         prediction = result[0] if isinstance(result, list) else result
         if not isinstance(prediction, dict) or "label" not in prediction:
             raise RuntimeError("NLI model returned an unsupported classification format")
+        score = prediction.get("score")
+        if isinstance(score, bool) or not isinstance(score, Real):
+            raise RuntimeError("NLI model returned a missing or non-numeric score")
+        try:
+            score = float(score)
+        except (ValueError, TypeError, OverflowError) as err:
+            raise RuntimeError("NLI model returned an invalid numerical score") from err
+        if not math.isfinite(score):
+            raise RuntimeError("NLI model returned a non-finite score")
         return {
             "label": str(prediction["label"]).lower(),
-            "score": float(prediction["score"]) if "score" in prediction else None,
+            "score": score,
         }
 
     def classify(self, premise: str, hypothesis: str) -> str:

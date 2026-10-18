@@ -22,6 +22,38 @@ class FakeNLI:
         return self.label
 
 
+@pytest.mark.parametrize("prediction", [
+    {"label": "entailment", "score": float("nan")},
+    {"label": "entailment", "score": float("inf")},
+    {"label": "contradiction", "score": float("-inf")},
+    {"label": "entailment"},
+    *[{"label": "entailment", "score": value} for value in
+      (None, "0.9", "invalid", True, [], {}, 10**1000)],
+])
+def test_actual_nli_adapter_rejects_invalid_scores(prediction):
+    nli = LocalNLI()
+    nli._pipeline = lambda *a, **k: [prediction]
+    with pytest.raises(RuntimeError, match="score"):
+        nli.classify_with_diagnostics("The system must retain logs.", "The system shall retain logs.")
+    fact = extract_facts("The system shall retain logs.", use_spacy=False)[0]
+    result = FactVerifier(nli).verify(fact, [Evidence("E1", "The system must retain logs.")])
+    assert result.outcome is VerificationOutcome.ERROR
+    assert "score" in result.diagnostic
+
+
+@pytest.mark.parametrize("label,expected", [
+    ("entailment", VerificationOutcome.SUPPORTED),
+    ("contradiction", VerificationOutcome.CONTRADICTED),
+    ("neutral", VerificationOutcome.INCONCLUSIVE),
+])
+def test_actual_nli_adapter_preserves_valid_finite_labels(label, expected):
+    nli = LocalNLI()
+    nli._pipeline = lambda *a, **k: [{"label": label, "score": 0.9}]
+    fact = extract_facts("The system shall retain logs.", use_spacy=False)[0]
+    result = FactVerifier(nli).verify(fact, [Evidence("E1", "The system must retain logs.")])
+    assert result.outcome is expected
+
+
 def test_exact_fact_is_symbolically_supported():
     fact = extract_facts("The system shall allow login.", use_spacy=False)[0]
     result = FactVerifier().verify(fact, [Evidence("SRS-L1", fact.text)])
@@ -81,7 +113,7 @@ def test_local_nli_sends_a_premise_hypothesis_pair():
 
     def fake_pipeline(inputs, **kwargs):
         received.update(inputs)
-        return [{"label": "entailment"}]
+        return [{"label": "entailment", "score": 0.9}]
 
     nli._pipeline = fake_pipeline
     assert nli.classify("Source evidence", "Requirement claim") == "entailment"
