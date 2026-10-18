@@ -48,11 +48,13 @@ describe('c4 adequacy report', () => {
       subject_id: 'SUB-EX-1',
       config: { trace_signal: 'coverage_only', mutate: ['subject-src/src/registration.js'] },
       summary: { mutants_total: 14, survived: 1, mutation_score: 0.9286 },
-      recommendations: [],
     });
     expect(r.summary).not.toHaveProperty('other');
     expect(r.survivors.map((s) => s.trace.requirement_ids)).toEqual([['REQ-EX-001']]);
     expect(r.survivors.map((s) => s.gap?.type)).toEqual(['weak_assertion']);
+    expect(r.recommendations).toMatchObject([
+      { rec_id: 'REC-001', route_to: 'C3', mutant_ids: ['12'], predicted_impact: 0.0714 },
+    ]);
   });
 
   test('written report passes validate.mjs in a copy of the golden folder', () => {
