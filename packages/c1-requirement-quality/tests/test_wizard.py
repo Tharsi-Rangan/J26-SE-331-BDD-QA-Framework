@@ -2032,7 +2032,8 @@ def test_stage4h4b_offline_no_downloads(app, tmp_path):
         recorded_kwargs.update(kwargs)
         return lambda pair, **k: [{"label": "entailment", "score": 0.95}]
 
-    with patch.object(transformers.pipelines, "pipeline", side_effect=mock_pipeline), \
+    with patch("c1_requirement_quality.rag.verifier.get_deberta_nli_cache_dir", return_value=tmp_path), \
+         patch.object(transformers.pipelines, "pipeline", side_effect=mock_pipeline), \
          patch.object(transformers, "pipeline", side_effect=mock_pipeline):
         diag = nli.classify_with_diagnostics("Premise text", "Hypothesis text")
         assert diag["label"] == "entailment"
