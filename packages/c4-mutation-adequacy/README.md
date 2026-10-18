@@ -35,10 +35,14 @@ Copy `.env.example` to `.env` for model settings. Never commit `.env`.
 | C4-05 | Equivalent-mutant filter with rules E1 and E2 (`src/equivalent.ts`); writes `c4/equivalent_mutants.json`. Spot-check log: `docs/equivalent-spot-check.md` |
 | C4-06 | Trace of each survivor to TST, SCN and REQ (`src/trace.ts`); `c4 run` writes `c4/adequacy_report.json` (`src/report.ts`) |
 | C4-07 | Trace-signal modes with an embedding tie-break (`src/signal.ts`, `src/embedding.ts`) |
+| C4-09 | Gap classifier: each survivor gets a gap type, evidence and an explanation (`src/gap.ts`) |
+| C4-10 | Ranked recommendations, routed to C1, C2 or C3 (`src/recommend.ts`) |
 
 On the golden example, `c4 run` gives 14 mutants, 13 killed, 1 survived (mutant 12), score 0.9286.
 Mutant 12 traces to TST-EX-001-02-01 and TST-EX-001-02-06, SCN-EX-001-02 and REQ-EX-001.
 This is the same as the golden `adequacy_report.json`, and the report passes `validate.mjs`.
+The gap of mutant 12 is `weak_assertion`, and REC-001 routes it to C3 with a predicted impact of 0.0714.
+Both are the same as the golden report. Only the action text is different.
 
 ## Equivalent-mutant rules
 
@@ -68,8 +72,41 @@ C4 checks only `Survived` and `NoCoverage` mutants. A flagged mutant gets `equiv
 - The embedding modes never drop a coverage link. They only change the order and the confidence.
 - `confidence` is the share of the top similarity in the sum of all similarities. Equal similarities give 1/n, the same as `coverage_only`.
 
+## Gap rules
+
+C4 gives each survivor one gap type. The first rule that matches wins.
+
+| Order | Gap type | A survivor gets it when | Evidence |
+|---|---|---|---|
+| 1 | none (`gap: null`) | The mutant is equivalent (C4-05). | - |
+| 2 | `missing_test` | No manifest test covers the mutant. | Mutated code |
+| 3 | `incomplete_mock` | The mutated code calls a symbol that `c3/mock_decisions.json` mocks for a scenario of the trace. | Mutated code |
+| 4 | `missing_boundary` | The mutator is `EqualityOperator`, for example `<` to `<=`. | Mutated code |
+| 5 | `untested_branch` | The mutator is `ConditionalExpression`, `LogicalOperator`, `BlockStatement` or `OptionalChaining`. | Mutated code |
+| 6 | `weak_assertion` | All other survivors that a test covers. | The `expect(...)` line of a covering test |
+
+For `weak_assertion`, C4 picks a `toThrow` check when the mutated code throws, and a value check when it returns.
+
+## Recommendations
+
+C4 groups the survivors that have a gap by gap type, route and scenario. Each group is one recommendation.
+
+| Gap type | Route | What the stage must do |
+|---|---|---|
+| `missing_test` | C2 | Add a scenario that runs the code. Used when the trace has no scenario. |
+| `missing_test` | C3 | Generate a test for the scenario. Used when the `full` mode found a scenario. |
+| `missing_test` | C1 | Add the behaviour to a requirement. Used when the embedding link has a confidence below 0.5. |
+| `untested_branch` | C2 | Add a scenario that takes the branch. |
+| `missing_boundary` | C2 | Add Examples rows at the exact limit. |
+| `weak_assertion` | C3 | Make the assertion check the changed value. |
+| `incomplete_mock` | C3 | Check the mock call arguments, or make the mock return depend on the input. |
+
+- `predicted_impact` is the gain in `mutation_score_filtered` when the tests kill every mutant of the group.
+- Rank order: higher impact first, then gap type in the order of the table, then requirement and scenario ID.
+- A survivor with no requirement targets the subject's requirement when the subject has exactly one. If not, C4 skips it.
+
 ## Next Planner tasks
 
 - C4-07 comparison table: run all 3 modes on the pilots with Ollama running
 - C4-08 Blind ground truth for the pilot survivor traces
-- C4-09 Gap classifier: 5 gap types with evidence
+- C4-11 HTML view of the adequacy report

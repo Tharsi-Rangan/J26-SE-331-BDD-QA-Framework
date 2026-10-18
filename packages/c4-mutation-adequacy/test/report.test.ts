@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
-import { loadInputs } from '../src/loader.js';
+import { classifyGaps } from '../src/gap.js';
+import { loadInputs, loadMockDecisions } from '../src/loader.js';
 import { buildReport, writeReport } from '../src/report.js';
 import { aggregateScores } from '../src/scores.js';
 import { buildSurvivors, testsByStrykerId } from '../src/trace.js';
@@ -27,7 +28,12 @@ function goldenReport() {
   ) as MutationReport;
   const tests = inputs.manifest.tests;
   const scores = aggregateScores(mutation, tests, inputs.subject.requirement_ids);
-  const survivors = buildSurvivors(mutation, testsByStrykerId(mutation, tests));
+  const survivors = classifyGaps(buildSurvivors(mutation, testsByStrykerId(mutation, tests)), {
+    report: mutation,
+    tests,
+    testSource: (file) => fs.readFileSync(path.join(golden, file), 'utf8'),
+    mockDecisions: loadMockDecisions(golden),
+  });
   return buildReport(inputs, '10.0.0', scores, survivors, new Date('2026-10-14T00:00:00Z'));
 }
 
@@ -42,10 +48,13 @@ describe('c4 adequacy report', () => {
       subject_id: 'SUB-EX-1',
       config: { trace_signal: 'coverage_only', mutate: ['subject-src/src/registration.js'] },
       summary: { mutants_total: 14, survived: 1, mutation_score: 0.9286 },
-      recommendations: [],
     });
     expect(r.summary).not.toHaveProperty('other');
     expect(r.survivors.map((s) => s.trace.requirement_ids)).toEqual([['REQ-EX-001']]);
+    expect(r.survivors.map((s) => s.gap?.type)).toEqual(['weak_assertion']);
+    expect(r.recommendations).toMatchObject([
+      { rec_id: 'REC-001', route_to: 'C3', mutant_ids: ['12'], predicted_impact: 0.0714 },
+    ]);
   });
 
   test('written report passes validate.mjs in a copy of the golden folder', () => {

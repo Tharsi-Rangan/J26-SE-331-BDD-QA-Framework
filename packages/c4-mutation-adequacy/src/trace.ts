@@ -1,3 +1,4 @@
+import type { Gap } from './gap.js';
 import type {
   ManifestTest,
   MutantStatus,
@@ -26,6 +27,7 @@ export interface Survivor {
   status: MutantStatus;
   equivalent: boolean;
   trace: Trace;
+  gap?: Gap | null;
 }
 
 /** Map StrykerJS test id -> manifest test, joined on the exact Jest full name. */

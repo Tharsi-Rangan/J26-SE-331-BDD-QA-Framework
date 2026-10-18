@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { assertMatchesSchema } from './contracts.js';
 import type { C4Inputs } from './loader.js';
+import { buildRecommendations, type Recommendation } from './recommend.js';
 import type { RequirementScore, Scores } from './scores.js';
 import type { TraceSignalMode } from './signal.js';
 import type { Survivor } from './trace.js';
@@ -32,10 +33,10 @@ export interface AdequacyReport {
   summary: Omit<Scores['summary'], 'other'>;
   requirements: RequirementScore[];
   survivors: Survivor[];
-  recommendations: unknown[];
+  recommendations: Recommendation[];
 }
 
-/** Build `c4/adequacy_report.json`. Gaps and recommendations come in C4-09 and C4-10. */
+/** Build `c4/adequacy_report.json`. Survivors with a gap give the recommendations. */
 export function buildReport(
   inputs: C4Inputs,
   strykerVersion: string,
@@ -69,7 +70,11 @@ export function buildReport(
     summary,
     requirements: scores.requirements,
     survivors,
-    recommendations: [],
+    recommendations: buildRecommendations(
+      survivors,
+      scores.summary,
+      inputs.subject.requirement_ids,
+    ),
   };
 }
 
