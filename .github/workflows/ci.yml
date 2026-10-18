@@ -29,5 +29,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install -e ".[dev]"
+      - name: Install CPU-only PyTorch
+        run: pip install "torch>=2.2" --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -e ".[dev,rag]"
       - run: pytest
+        env:
+          HF_HUB_OFFLINE: '1'
+          TRANSFORMERS_OFFLINE: '1'
+          HF_HUB_DISABLE_TELEMETRY: '1'

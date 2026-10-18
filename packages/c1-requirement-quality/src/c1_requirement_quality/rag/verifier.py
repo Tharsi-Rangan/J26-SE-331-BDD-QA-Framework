@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
@@ -10,6 +9,8 @@ from typing import Any
 
 from c1_requirement_quality.rag.fact_extractor import Fact, extract_facts
 from c1_requirement_quality.rag.model_loading import RAGModelLoadError
+from c1_requirement_quality.model_paths import DEBERTA_NLI_MODEL_NAME, get_deberta_nli_cache_dir
+from c1_requirement_quality.lexical_patterns import COMPARISON_TOKEN_PATTERN
 
 
 class VerificationOutcome(str, Enum):
@@ -27,12 +28,13 @@ class VerificationResult:
     diagnostic: str | None = None
     component: str | None = None
     model_name: str | None = None
+    evidence_outcomes: tuple[tuple[str, str], ...] = ()
 
 
 class LocalNLI:
     """Lazy local transformers NLI; loads cached weights only."""
 
-    def __init__(self, model_name: str = "cross-encoder/nli-deberta-v3-small") -> None:
+    def __init__(self, model_name: str = DEBERTA_NLI_MODEL_NAME) -> None:
         self.model_name = model_name
         self._pipeline: Any | None = None
 
@@ -48,15 +50,21 @@ class LocalNLI:
             except ImportError as err:
                 raise RAGModelLoadError("nli", self.model_name, err) from err
             try:
+                model_path = self.model_name
+                if self.model_name == DEBERTA_NLI_MODEL_NAME:
+                    directory = get_deberta_nli_cache_dir()
+                    if directory is None:
+                        raise FileNotFoundError("DeBERTa snapshot unavailable in configured local model/cache directories")
+                    model_path = str(directory)
                 self._pipeline = pipeline(
-                    "text-classification", model=self.model_name, tokenizer=self.model_name,
-                    local_files_only=True, device=-1,
+                    "text-classification", model=model_path, tokenizer=model_path,
+                    local_files_only=True, device="cpu",
                 )
             except Exception as err:
                 raise RAGModelLoadError("nli", self.model_name, err) from err
         return self._pipeline
 
-    def classify(self, premise: str, hypothesis: str) -> str:
+    def classify_with_diagnostics(self, premise: str, hypothesis: str) -> dict[str, Any]:
         result = self._load()(
             {"text": premise, "text_pair": hypothesis}, truncation=True
         )
@@ -65,11 +73,17 @@ class LocalNLI:
         prediction = result[0] if isinstance(result, list) else result
         if not isinstance(prediction, dict) or "label" not in prediction:
             raise RuntimeError("NLI model returned an unsupported classification format")
-        return str(prediction["label"]).lower()
+        return {
+            "label": str(prediction["label"]).lower(),
+            "score": float(prediction["score"]) if "score" in prediction else None,
+        }
+
+    def classify(self, premise: str, hypothesis: str) -> str:
+        return self.classify_with_diagnostics(premise, hypothesis)["label"]
 
 
 def _tokens(text: str) -> tuple[str, ...]:
-    return tuple(re.findall(r"\d+(?:\.\d+)?|[a-z]+(?:'[a-z]+)?", text.lower()))
+    return tuple(COMPARISON_TOKEN_PATTERN.findall(text.lower()))
 
 
 def _content_signature(text: str) -> tuple[str, ...]:
@@ -176,44 +190,52 @@ class FactVerifier:
         self.nli = nli
 
     def verify(self, fact: Fact, evidence: list[Any]) -> VerificationResult:
+        """Aggregate all retrieved passages without hiding conflicting evidence.
+
+        Evidence IDs attribute support/contradiction only; per-passage outcomes
+        also retain neutral/error results. Errors block success even when other
+        passages support the claim. This covers retrieved evidence, not the
+        completeness of retrieval across the source document.
+        """
         if not evidence:
             return VerificationResult(VerificationOutcome.INCONCLUSIVE, diagnostic="No evidence retrieved")
-        seen: list[str] = []
-        inconclusive: list[Any] = []
+        results: list[tuple[str, VerificationResult]] = []
         for item in evidence:
             evidence_id = str(item.chunk_id)
             symbolic = verify_symbolically(fact, item.text, evidence_id)
-            if symbolic.outcome is VerificationOutcome.SUPPORTED:
-                return symbolic
-            if symbolic.outcome is VerificationOutcome.CONTRADICTED:
-                return symbolic
-            seen.append(evidence_id)
-            inconclusive.append(item)
-        if self.nli is None:
-            return VerificationResult(VerificationOutcome.INCONCLUSIVE, tuple(seen), diagnostic="No NLI classifier configured")
-        try:
-            outcomes: list[str] = [self.nli.classify(item.text, fact.text).lower() for item in inconclusive]
-        except (ImportError, OSError, RuntimeError, ValueError, KeyError) as err:
-            model_name = getattr(self.nli, "model_name", None)
-            component = "nli"
-            if isinstance(err, RAGModelLoadError):
-                component = err.component
-                model_name = err.model_name
-            return VerificationResult(
-                VerificationOutcome.ERROR, tuple(seen), "nli", str(err),
-                component, model_name,
-            )
-        if any(label in {"entailment", "entails", "supported"} for label in outcomes):
-            return VerificationResult(
-                VerificationOutcome.SUPPORTED, tuple(seen), "nli",
-                model_name=getattr(self.nli, "loaded_model_name", None),
-            )
-        if any(label in {"contradiction", "contradicts"} for label in outcomes):
-            return VerificationResult(
-                VerificationOutcome.CONTRADICTED, tuple(seen), "nli",
-                model_name=getattr(self.nli, "loaded_model_name", None),
-            )
+            result = symbolic
+            if symbolic.outcome is VerificationOutcome.INCONCLUSIVE and self.nli is not None:
+                try:
+                    label = self.nli.classify(item.text, fact.text).lower()
+                    outcome = (
+                        VerificationOutcome.SUPPORTED if label in {"entailment", "entails", "supported"}
+                        else VerificationOutcome.CONTRADICTED if label in {"contradiction", "contradicts"}
+                        else VerificationOutcome.INCONCLUSIVE
+                    )
+                    result = VerificationResult(outcome, (evidence_id,), "nli",
+                        model_name=getattr(self.nli, "loaded_model_name", None))
+                except (ImportError, OSError, RuntimeError, ValueError, KeyError) as err:
+                    result = VerificationResult(VerificationOutcome.ERROR, (evidence_id,), "nli", str(err),
+                        getattr(err, "component", "nli"),
+                        getattr(err, "model_name", getattr(self.nli, "model_name", None)))
+            results.append((evidence_id, result))
+
+        # Inspect every retrieved passage. Errors prevent success; contradiction
+        # takes precedence over support, regardless of retrieval order.
+        states = {result.outcome for _, result in results}
+        outcome = next(state for state in (
+            VerificationOutcome.ERROR, VerificationOutcome.CONTRADICTED,
+            VerificationOutcome.SUPPORTED, VerificationOutcome.INCONCLUSIVE,
+        ) if state in states)
+        decisive = [result for _, result in results if result.outcome is outcome]
+        attributed = tuple(dict.fromkeys(eid for eid, result in results
+            if result.outcome in {VerificationOutcome.SUPPORTED, VerificationOutcome.CONTRADICTED}))
+        methods = {result.method for result in decisive}
+        diagnostics = [result.diagnostic for _, result in results if result.diagnostic]
+        if outcome is VerificationOutcome.INCONCLUSIVE and self.nli is None:
+            diagnostics.append("No NLI classifier configured")
         return VerificationResult(
-            VerificationOutcome.INCONCLUSIVE, tuple(seen), "nli",
-            model_name=getattr(self.nli, "loaded_model_name", None),
+            outcome, attributed, next(iter(methods)) if len(methods) == 1 else "mixed",
+            "; ".join(diagnostics) or None, decisive[0].component, decisive[0].model_name,
+            tuple((eid, result.outcome.value) for eid, result in results),
         )

@@ -28,7 +28,7 @@ from c1_requirement_quality.validation_lifecycle import (
 DECISIONS = frozenset({"approved", "rejected", "edited", "pending", "not_required"})
 ACCEPTED_DECISIONS = frozenset({"approved", "edited", "not_required"})
 REQUIRED_READINESS_CHECKS = ("quality", "grounding", "consistency", "bdd_readiness")
-PLACEHOLDER_PATTERN = re.compile(r"\[[^\]]+\]|\bTBD\b|\bTBC\b", re.IGNORECASE)
+from c1_requirement_quality.lexical_patterns import PLACEHOLDER_PATTERN
 
 
 def stable_candidate_id(requirement_id: str, text: str) -> str:
@@ -152,9 +152,9 @@ def _validate_answers(value: Any, questions: list[str]) -> list[dict[str, str]]:
 
 
 def _evaluate_candidate(text: str, srs_text: str, original_text: str | None = None,
-                        workflow_record: dict[str, Any] | None = None) -> dict[str, Any]:
+                        workflow_record: dict[str, Any] | None = None, *, source_format: str | None = None) -> dict[str, Any]:
     findings = analyse_requirement(text)
-    grounding = grounded_current(text, srs_text, original_text, workflow_record)
+    grounding = grounded_current(text, srs_text, original_text, workflow_record, source_format=source_format)
     grounding_status = grounding.get("status")
     if grounding_status == "supported":
         grounding_check = "pass"
@@ -175,7 +175,14 @@ def _consistency_with_candidate(
     requirement_id: str,
     candidate_text: str,
     requirements: list[dict[str, Any]],
+    workflow_records=None, consistency_context=None,
 ) -> dict[str, Any]:
+    if consistency_context is not None:
+        from c1_requirement_quality.effective_consistency import assess
+        rows = copy.deepcopy(requirements)
+        for row in rows:
+            if row["requirement_id"] == requirement_id: row["final_text"] = candidate_text
+        return assess(requirement_id, rows, workflow_records, consistency_context)
     comparison_rows = []
     for requirement in requirements:
         other_id = requirement.get("requirement_id")
@@ -233,6 +240,7 @@ def process_refinement_actions(
     srs_text: str,
     *,
     workflow_records: dict[str, Any] | None = None,
+    consistency_context: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Apply explicit user-authored candidates and decisions to a C1 artifact.
 
@@ -249,6 +257,7 @@ def process_refinement_actions(
     if not isinstance(srs_text, str):
         raise ValueError("srs_text must be a string")
 
+    source_format = "docx" if validated_requirements.get("source_document", {}).get("name", "").lower().endswith(".docx") else None
     requirement_rows = validated_requirements.get("requirements")
     action_rows = actions.get("requirements")
     if set(actions) != {"requirements"}:
@@ -356,9 +365,9 @@ def process_refinement_actions(
             record = workflow_records.get(requirement_id) if workflow_records else None
             candidate_resolution = clarification_resolution(record, original_text, questions)
             candidate_escalation = bool(record.get("escalation_active") if record else requirement.get("tier") == "TIER_3_ESCALATE")
-            evaluation = _evaluate_candidate(candidate["text"], srs_text, original_text, record)
+            evaluation = _evaluate_candidate(candidate["text"], srs_text, original_text, record, source_format=source_format)
             candidate_consistency = _consistency_with_candidate(
-                requirement_id, candidate["text"], baseline_requirements
+                requirement_id, candidate["text"], baseline_requirements, workflow_records, consistency_context
             )
             candidate_tier_result = classify_tier(
                 evaluation["quality_findings"],
@@ -395,7 +404,7 @@ def process_refinement_actions(
 
         if decision in {"approved", "edited"}:
             final_text = candidate_by_id[selected_id]
-            evaluation = _evaluate_candidate(final_text, srs_text)
+            evaluation = _evaluate_candidate(final_text, srs_text, source_format=source_format)
             checks = requirement.setdefault("validation", {}).setdefault("checks", {})
             checks["quality"] = evaluation["quality_check"]
             checks["grounding"] = evaluation["grounding_check"]
@@ -452,13 +461,19 @@ def process_refinement_actions(
     ])
     diagnostic_by_id = {item["requirement_id"]: item for item in diagnostics}
     final_peers = [{"requirement_id": r["requirement_id"], "text": r["final_text"]} for r in output["requirements"]]
+    if consistency_context is not None:
+        from c1_requirement_quality.effective_consistency import assess_all
+        final_assessments = assess_all(output["requirements"], workflow_records, consistency_context)
     for requirement in output["requirements"]:
         requirement_id = str(requirement["requirement_id"])
-        consistency = consistency_for_requirement(requirement_id, final_analysis)
+        if consistency_context is not None:
+            consistency = final_assessments[requirement_id]
+        else:
+            consistency = consistency_for_requirement(requirement_id, final_analysis)
         final_text = requirement.get("final_text", requirement.get("original_text"))
         final_findings = analyse_requirement(final_text)
         record = workflow_records.get(requirement_id) if workflow_records else None
-        evaluation = _evaluate_candidate(final_text, srs_text, requirement["original_text"], record)
+        evaluation = _evaluate_candidate(final_text, srs_text, requirement["original_text"], record, source_format=source_format)
         final_grounding = evaluation["grounding"]
         resolution = clarification_resolution(record, requirement["original_text"], list(requirement.get("clarification_questions") or []))
         unresolved = resolution["unresolved_questions"]
@@ -528,8 +543,8 @@ def process_refinement_actions(
             # Current candidate diagnostics use the complete final peer set,
             # not stale pre-action peers from an earlier snapshot.
             for candidate in diagnostic["candidates"]:
-                candidate_evaluation = _evaluate_candidate(candidate["text"], srs_text, requirement["original_text"], record)
-                candidate_consistency = _consistency_with_candidate(requirement_id, candidate["text"], output["requirements"])
+                candidate_evaluation = _evaluate_candidate(candidate["text"], srs_text, requirement["original_text"], record, source_format=source_format)
+                candidate_consistency = _consistency_with_candidate(requirement_id, candidate["text"], output["requirements"], workflow_records, consistency_context)
                 candidate_tier = classify_tier(
                     candidate_evaluation["quality_findings"], candidate_evaluation["grounding"], candidate_consistency,
                     original_text=requirement["original_text"], candidate_text=candidate["text"],

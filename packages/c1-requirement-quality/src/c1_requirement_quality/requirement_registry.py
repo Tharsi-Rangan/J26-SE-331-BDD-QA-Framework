@@ -68,14 +68,22 @@ class RequirementRegistry:
 
     @contextmanager
     def publication_lock(self) -> Iterator[None]:
-        """Serialize publishers and reject stale snapshots without replacing history."""
+        """Serialize publishers and reject stale snapshots without replacing history.
+
+        Crash recovery is manual: stop publishers for this exact registry, verify
+        through the owning OS account/process supervisor that no publisher remains,
+        inspect the registry and retained staging artifacts, then explicitly remove
+        only its .lock file. Age alone never proves ownership or inactivity. Start
+        a fresh invocation to re-read and validate registry state; never replay or
+        merge staged state blindly. Do not remove a lock with uncertain ownership.
+        """
         self.assert_writable()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         lock = self.path.with_name(self.path.name + ".lock")
         try:
             handle = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         except FileExistsError as err:
-            raise RuntimeError(f"Registry publication lock already exists: {lock}") from err
+            raise RuntimeError(f"Registry publication lock already exists: {lock}; verify publisher ownership/inactivity before manual recovery; never remove based only on age") from err
         try:
             os.close(handle)
             current = self.path.read_bytes() if self.path.exists() else None

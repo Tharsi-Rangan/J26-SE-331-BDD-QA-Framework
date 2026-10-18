@@ -36,8 +36,18 @@ TOOL_VERSION = "0.1.0"
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="c1")
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command")
 
+    demo_parser = sub.add_parser("demo", help="guided resumable review; saved sidecars, no model/API execution")
+    mode = demo_parser.add_mutually_exclusive_group()
+    mode.add_argument("--workspace", help="fresh session directory")
+    mode.add_argument("--resume", help="existing session directory")
+    demo_parser.add_argument("--in", dest="input_path", help="verified existing run artifact")
+    demo_parser.add_argument("--srs", help="SRS for new analysis; defaults to archived source for existing run")
+    demo_parser.add_argument("--run-id")
+    demo_parser.add_argument("--registry")
+    demo_parser.add_argument("--project-code", default="EX")
+    demo_parser.add_argument("--document-id")
     run_parser = sub.add_parser(
         "run",
         help="parse an SRS into C1 requirements",
@@ -76,6 +86,8 @@ def build_parser() -> argparse.ArgumentParser:
     gen_parser.add_argument("--in", dest="input_path", required=True, help="validated_requirements.json")
     gen_parser.add_argument("--srs", required=True, help="source SRS file")
     gen_parser.add_argument("--out", required=True, help="path for candidate_suggestions.json output sidecar")
+    gen_parser.add_argument("--backend", choices=("deterministic", "groq"), default="deterministic",
+                            help="groq explicitly sends requirement/evidence context to the configured cloud model")
     gen_parser.add_argument(
         "--clarification-answers",
         dest="clarification_answers",
@@ -83,28 +95,45 @@ def build_parser() -> argparse.ArgumentParser:
     )
     gen_parser.add_argument(
         "--grounding-mode",
-        choices=("lexical", "rag"),
+        choices=("lexical",),
         default="lexical",
-        help="grounding mode (default: lexical)",
+        help="candidate validation supports lexical only; use run for RAG analysis",
     )
+    proposal_parser = sub.add_parser("propose-clarifications", help="opt-in Groq clarification sidecar; explicit human handoff")
+    proposal_parser.add_argument("--in", dest="input_path", required=True)
+    proposal_parser.add_argument("--srs", required=True)
+    proposal_parser.add_argument("--out", required=True)
+    proposal_parser.add_argument("--requirement-id", action="append", required=True)
+    proposal_parser.add_argument("--backend", choices=("groq",), required=True)
+    proposal_parser.add_argument("--defect-diagnostics")
+    proposal_parser.add_argument("--similarity-diagnostics")
+    proposal_parser.add_argument("--max-requests", type=int, default=2)
+    proposal_parser.add_argument("--max-evidence-chars", type=int, default=6000)
+    proposal_parser.add_argument("--max-context-chars", type=int, default=12000)
+    similarity_parser = sub.add_parser("diagnose-similarity", help="opt-in local MiniLM pair diagnostics; no decision effect")
+    similarity_parser.add_argument("--in", dest="input_path", required=True)
+    similarity_parser.add_argument("--out", required=True, help="new diagnostic JSON file")
+    similarity_parser.add_argument("--model-dir", help="local all-MiniLM-L6-v2 checkpoint directory")
+    similarity_parser.add_argument("--threshold", type=float, help="experimental similarity cutoff [0,1]; unset selects nothing")
+    similarity_parser.add_argument("--batch-size", type=int, default=4)
+    similarity_parser.add_argument("--max-pairs", type=int, default=10_000)
+    ml_parser = sub.add_parser("diagnose-defects", help="opt-in local experimental DistilBERT sidecar; no decision effect")
+    ml_parser.add_argument("--in", dest="input_path", required=True)
+    ml_parser.add_argument("--out", required=True, help="new diagnostic JSON file")
+    ml_parser.add_argument("--model-dir", help="local verified Experiment 2 checkpoint directory")
+    ml_parser.add_argument("--threshold", type=float, help="experimental sigmoid cutoff in [0,1]; unset returns scores only")
+    for command in ("list-pairs", "review-pairs"):
+        pair_parser = sub.add_parser(command, help="export internal pair applicability; no decision-gate effect")
+        pair_parser.add_argument("--in", dest="input_path", required=True)
+        pair_parser.add_argument("--srs", required=True)
+        pair_parser.add_argument("--out", required=True, help="new internal review snapshot JSON")
+        pair_parser.add_argument("--previous", help="previous immutable review snapshot to carry forward")
+        if command == "review-pairs":
+            pair_parser.add_argument("--actions", required=True, help="JSON containing explicit human decisions")
     return parser
 
 
-def _validate_contract_artifact(artifact: dict[str, object]) -> None:
-    """Validate a C1 artifact against the unchanged local v1.0.0 schemas."""
-    from jsonschema import Draft202012Validator
-    from referencing import Registry, Resource
-
-    schema_dir = Path(__file__).resolve().parents[3] / "contracts" / "schemas"
-    schema = json.loads((schema_dir / "c1-validated-requirements.schema.json").read_text(encoding="utf-8"))
-    common = json.loads((schema_dir / "common.schema.json").read_text(encoding="utf-8"))
-    registry = Registry().with_resource(common["$id"], Resource.from_contents(common))
-    validator = Draft202012Validator(schema, registry=registry)
-    errors = sorted(validator.iter_errors(artifact), key=lambda error: list(map(str, error.absolute_path)))
-    if errors:
-        first = errors[0]
-        location = ".".join(str(part) for part in first.absolute_path) or "<root>"
-        raise ValueError(f"C1 contract validation failed at {location}: {first.message}")
+from c1_requirement_quality.contract import validate_contract_artifact, _validate_contract_artifact
 
 
 def refine_run(input_path: Path, srs: Path, actions_path: Path, out: Path) -> None:
@@ -119,6 +148,8 @@ def refine_run(input_path: Path, srs: Path, actions_path: Path, out: Path) -> No
     actions = json.loads(actions_path.read_text(encoding="utf-8-sig"))
     _validate_contract_artifact(artifact)
     srs_text, manifest = verify_source(input_path, srs)
+    from c1_requirement_quality.source_integrity import require_refinement_grounding
+    require_refinement_grounding(manifest)
     parent_state, _ = load_state(input_path, srs)
     refined, diagnostics, workflow_state = refine_with_history(
         artifact, actions, srs_text, parent_state, input_path, out / "c1", manifest,
@@ -156,6 +187,9 @@ def _run_staged(
     registry: RequirementRegistry | None = None,
     grounding_mode: str = "lexical",
     document_id: str | None = None,
+    progress=None,
+    stage_progress=None,
+    mandatory_rag: bool = False,
 ) -> None:
     """Parse an SRS, run quality and grounding analysis, and write contract-compliant artifacts.
 
@@ -171,11 +205,14 @@ def _run_staged(
         raise ValueError(f"Invalid run_id: {run_id}")
     if grounding_mode not in {"lexical", "rag"}:
         raise ValueError("grounding_mode must be 'lexical' or 'rag'")
+    if mandatory_rag and grounding_mode != "rag":
+        raise ValueError("Mandatory RAG analysis cannot use lexical grounding")
 
     # Extract normalized full text and requirements from any supported SRS format
     c1_dir = out / "c1"
     c1_dir.mkdir()
-    doc, manifest = snapshot_source(c1_dir, srs, document_identity(srs, document_id))
+    if progress: progress("Document reading and requirement extraction...")
+    doc, manifest = snapshot_source(c1_dir, srs, document_identity(srs, document_id), stage_progress=stage_progress)
     srs_text = doc.raw_text
     extracted = [req.to_legacy_item() for req in doc.requirements]
     if not extracted:
@@ -200,12 +237,21 @@ def _run_staged(
                 req_entry[extra_key] = item[extra_key]
         requirements.append(req_entry)
 
+    if stage_progress:
+        stage_progress("extract", "completed", f"{len(requirements)} requirements identified")
+        stage_progress("quality", "running", "")
+
     # Stage B: run deterministic lexical quality analysis.
     # analyse_requirements preserves input order and is independent per requirement.
+    if progress: progress("Quality checks...")
     quality_findings: list[list[dict[str, str]]] = analyse_requirements(
         [str(r["original_text"]) for r in requirements]
     )
+    if stage_progress:
+        stage_progress("quality", "completed", "Rule-based checks")
+        stage_progress("grounding", "running", "Deterministic grounding and consistency")
 
+    if progress: progress("Consistency analysis...")
     consistency_analysis = analyse_consistency([
         {"requirement_id": row["requirement_id"], "text": row["original_text"]}
         for row in requirements
@@ -217,16 +263,49 @@ def _run_staged(
         for row in requirements
     }
 
-    # Stage C: run deterministic grounding analysis against the raw SRS text.
-    rag_analyser = (
-        RAGGroundingAnalyser(srs_text, verifier=FactVerifier(LocalNLI()))
-        if grounding_mode == "rag" else None
-    )
-    grounding_results: list[dict[str, object]] = [
-        (rag_analyser.analyse(str(r["original_text"])) if rag_analyser else
-         analyse_grounding(str(r["original_text"]), srs_text))
-        for r in requirements
-    ]
+    # Stage C: use the selected grounding service against the archived full text.
+    if progress: progress("Grounding...")
+    rag_analyser = None
+    rag_provenance = None
+    try:
+        rag_analyser = (
+            RAGGroundingAnalyser(srs_text, use_spacy=False) if mandatory_rag else
+            RAGGroundingAnalyser(srs_text, verifier=FactVerifier(LocalNLI()))
+            if grounding_mode == "rag" else None
+        )
+        if mandatory_rag:
+            from c1_requirement_quality.ml.ml_diagnostics import _require_memory
+            _require_memory()
+            rag_provenance = rag_analyser.model_provenance()
+        grounding_results: list[dict[str, object]] = [
+            (rag_analyser.analyse(str(r["original_text"])) if rag_analyser else
+             analyse_grounding(str(r["original_text"]), srs_text, source_format="docx")
+              if doc.format == "docx" else analyse_grounding(str(r["original_text"]), srs_text))
+            for r in requirements
+        ]
+        if rag_analyser:
+            (c1_dir / "rag_diagnostics.json").write_text(json.dumps([
+                {"requirement_id": req["requirement_id"], "text": req["original_text"],
+                 **result} for req, result in zip(requirements, grounding_results, strict=True)
+            ], indent=2, ensure_ascii=False, allow_nan=False) + "\n", encoding="utf-8")
+        if mandatory_rag:
+            errors = [message for result in grounding_results for message in result.get("errors", [])]
+            if not errors and any(d.get("outcome") == "ERROR"
+                    for result in grounding_results for d in result.get("diagnostics", [])):
+                errors.append("RAG verification returned ERROR without diagnostic details")
+            if errors:
+                raise RuntimeError("; ".join(errors))
+            if rag_analyser.model_provenance() != rag_provenance:
+                raise RuntimeError("RAG model assets changed during analysis")
+    except Exception as error:
+        if mandatory_rag:
+            if stage_progress: stage_progress("grounding", "failed", str(error))
+            raise ValueError(f"Mandatory RAG grounding incomplete: {type(error).__name__}: {error}") from error
+        raise
+    if stage_progress:
+        stage_progress("grounding", "completed", "Implemented checks finished; uncertainty remains reviewable")
+        stage_progress("tier", "running", "")
+    if progress: progress("Tier classification...")
     tier_results = {
         str(requirement["requirement_id"]): classify_tier(
             findings,
@@ -237,15 +316,11 @@ def _run_staged(
             requirements, quality_findings, grounding_results, strict=True
         )
     }
+    if stage_progress:
+        stage_progress("tier", "completed", "Tier 1 / Tier 2 / Tier 3 assessed")
+        stage_progress("review", "running", "Validating and publishing review artifacts")
 
     if rag_analyser:
-        diagnostics_path = out / "c1" / "rag_diagnostics.json"
-        diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
-        diagnostics_path.write_text(json.dumps([
-            {"requirement_id": req["requirement_id"], "diagnostics": result.get("diagnostics", []),
-             "errors": result.get("errors", [])}
-            for req, result in zip(requirements, grounding_results, strict=True)
-        ], indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         for result in grounding_results:
             for message in result.get("errors", []):
                 print(f"[c1] RAG grounding error: {message}", file=sys.stderr)
@@ -382,13 +457,26 @@ def _run_staged(
         json.dumps(validated_requirements, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
+    if mandatory_rag:
+        from c1_requirement_quality.source_integrity import sha256
+        metadata = {"policy": "c1-initial-rag-v1", "status": "completed",
+            "input_sha256": sha256(validated_output_path.read_bytes()),
+            "source_sha256": manifest["sha256"], "normalized_sha256": manifest["normalized_sha256"],
+            "models": rag_provenance, "loaded_models": list(rag_analyser.loaded_model_names),
+            "scope": "initial original requirements only; refinement publication blocked"}
+        metadata_path = c1_dir / "internal/rag_provenance.json"
+        metadata_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        manifest.update(rag_policy="c1-initial-rag-v1",
+            rag_provenance_sha256=sha256(metadata_path.read_bytes()),
+            rag_diagnostics_sha256=sha256((c1_dir / "rag_diagnostics.json").read_bytes()))
     write_state(c1_dir, initial_state(validated_requirements, manifest))
     seal_source(c1_dir, manifest)
 
 
 def run(srs: Path, out: Path, run_id: str, project_code: str = "EX",
         registry_path: Path | None = None, grounding_mode: str = "lexical",
-        document_id: str | None = None) -> None:
+        document_id: str | None = None, progress=None, stage_progress=None,
+        mandatory_rag: bool = False) -> None:
     """Validate a staged run before publishing artifacts, then commit registry last.
 
     Failed staging directories are retained for inspection. No existing run is
@@ -406,7 +494,7 @@ def run(srs: Path, out: Path, run_id: str, project_code: str = "EX",
     out.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".c1-run-pending-", dir=out.parent))
     try:
-        _run_staged(srs, staging, run_id, project_code, registry, grounding_mode, document_id)
+        _run_staged(srs, staging, run_id, project_code, registry, grounding_mode, document_id, progress, stage_progress, mandatory_rag)
         staged = staging / "c1"
         _validate_contract_artifact(json.loads((staged / "validated_requirements.json").read_text(encoding="utf-8")))
         verify_source(staged / "validated_requirements.json", srs)
@@ -422,6 +510,10 @@ def run(srs: Path, out: Path, run_id: str, project_code: str = "EX",
                 raise
     except Exception as err:
         raise RuntimeError(f"C1 run not published; staging retained at {staging}: {err}") from err
+    try:
+        staging.rmdir()  # newly created by this invocation, and only if empty
+    except OSError:
+        print(f"[c1] published run; staging retained at {staging}", file=sys.stderr)
     print(f"[c1] wrote validated requirements to {target / 'validated_requirements.json'}")
     print(f"[c1] registry: {registry.path}")
 
@@ -429,6 +521,48 @@ def run(srs: Path, out: Path, run_id: str, project_code: str = "EX",
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.command is None or (args.command == "demo" and not args.workspace and not args.resume):
+            if args.command == "demo" and any((args.input_path, args.srs, args.run_id, args.registry, args.document_id)):
+                raise ValueError("Advanced demo inputs require --workspace or --resume")
+            from c1_requirement_quality.wizard import launch
+            return launch()
+        if args.command == "demo":
+            from c1_requirement_quality.demo_workflow import guided_demo
+            if args.resume and any((args.input_path, args.srs, args.run_id, args.registry, args.document_id)):
+                raise ValueError("Resume uses saved session inputs; do not supply new run arguments")
+            guided_demo(Path(args.resume or args.workspace), resume=bool(args.resume),
+                        artifact=Path(args.input_path) if args.input_path else None,
+                        source=Path(args.srs) if args.srs else None, run_id=args.run_id,
+                        registry=Path(args.registry) if args.registry else None,
+                        project_code=args.project_code, document_id=args.document_id)
+            return 0
+        if args.command == "propose-clarifications":
+            from c1_requirement_quality.clarification_proposals import propose_clarifications_run
+            propose_clarifications_run(Path(args.input_path), Path(args.srs), Path(args.out), args.requirement_id,
+                defect_diagnostics=Path(args.defect_diagnostics) if args.defect_diagnostics else None,
+                similarity_diagnostics=Path(args.similarity_diagnostics) if args.similarity_diagnostics else None,
+                max_requests=args.max_requests, max_evidence_chars=args.max_evidence_chars,
+                max_context_chars=args.max_context_chars)
+            return 0
+        if args.command == "diagnose-similarity":
+            from c1_requirement_quality.ml.similarity_diagnostics import similarity_diagnostics_run
+            similarity_diagnostics_run(Path(args.input_path), Path(args.out),
+                                       model_dir=Path(args.model_dir) if args.model_dir else None,
+                                       threshold=args.threshold, batch_size=args.batch_size,
+                                       max_pairs=args.max_pairs)
+            return 0
+        if args.command == "diagnose-defects":
+            from c1_requirement_quality.ml.ml_diagnostics import defect_diagnostics_run
+            defect_diagnostics_run(Path(args.input_path), Path(args.out),
+                                   model_dir=Path(args.model_dir) if args.model_dir else None,
+                                   threshold=args.threshold)
+            return 0
+        if args.command in {"list-pairs", "review-pairs"}:
+            from c1_requirement_quality.pair_applicability import pair_review_run
+            pair_review_run(Path(args.input_path), Path(args.srs), Path(args.out),
+                           previous_path=Path(args.previous) if args.previous else None,
+                           actions_path=Path(args.actions) if args.command == "review-pairs" else None)
+            return 0
         if args.command == "refine":
             refine_run(
                 Path(args.input_path), Path(args.srs), Path(args.actions), Path(args.out)
@@ -437,12 +571,18 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "generate-candidates":
             from c1_requirement_quality.rewrite_generator import generate_candidates_run
 
+            backend = None
+            if args.backend == "groq":
+                from c1_requirement_quality.groq_generator import GroqGeneratorBackend
+                backend = GroqGeneratorBackend.from_environment()
+
             generate_candidates_run(
                 Path(args.input_path),
                 Path(args.srs),
                 Path(args.out),
                 clarification_answers_path=Path(args.clarification_answers) if args.clarification_answers else None,
                 grounding_mode=args.grounding_mode,
+                backend=backend,
             )
             return 0
         run(

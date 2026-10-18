@@ -66,3 +66,19 @@ def test_embedding_load_failure_is_named_and_not_retried_per_fact():
     assert all(item["component"] == "embedding" for item in result["diagnostics"])
     assert all(item["model"] == "sentence-transformers/test-model" for item in result["diagnostics"])
     assert all("model files are not cached" in item["diagnostic"] for item in result["diagnostics"])
+
+
+def test_analyser_retains_support_and_conflict_without_promoting_grounding():
+    text = "The system shall allow login."
+    analyser = RAGGroundingAnalyser(text, embedder=FakeEmbedder(),
+        verifier=FactVerifier(), use_spacy=False)
+    from c1_requirement_quality.rag.indexer import SRSChunk
+    analyser.retriever.retrieve = lambda *args: [
+        SRSChunk("support", text, None, 1, 1),
+        SRSChunk("conflict", "The system shall not allow login.", None, 2, 2)]
+    result = analyser.analyse(text)
+    assert result["status"] == "unsupported"
+    assert {item["chunk_id"] for item in result["evidence"]} == {"support", "conflict"}
+    assert result["diagnostics"][0]["evidence_outcomes"] == [
+        {"chunk_id": "support", "outcome": "SUPPORTED"},
+        {"chunk_id": "conflict", "outcome": "CONTRADICTED"}]

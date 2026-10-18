@@ -390,6 +390,28 @@ grounding evidence can be established.
 
 ## User-authored refinement candidates and decisions
 
+### Optional Groq Qwen candidate proposals
+
+`generate-candidates` uses the deterministic backend by default. Explicitly
+select `--backend groq` to send requirement text, candidate evidence and supplied
+clarification answers to Groq. Set `GROQ_API_KEY` and an exact `GROQ_MODEL` in
+the ignored package `.env` or process environment; process values take precedence.
+No model is substituted automatically. Do not commit credentials.
+
+The cloud backend returns an ambiguity description, one clarification question
+and one proposed rewrite. These are retained as untrusted proposal provenance in
+the internal candidate sidecar, including rejected candidates. Unknown values
+must remain placeholders. New numeric values are rejected, and existing quality,
+grounding, consistency and candidate-validation checks still apply. These checks
+are conservative heuristics, not a guarantee against every fabricated statement.
+
+Existing eligibility gates remain: unresolved Tier 2 requirements and active
+escalations can block generation before any cloud request. Generation never
+changes the validated input, records a human answer or grants approval. Review
+and explicitly submit accepted proposals through `refine`. HTTP, timeout and
+malformed-response failures stop without retry or deterministic fallback; no
+candidate output is published on failure. Automated tests mock the provider.
+
 The `refine` command does not generate rewrite text; it accepts alternatives
 written by a requirement engineer, evaluates each with the existing lexical
 quality, grounding, and consistency checks, and applies only an explicitly supplied human
@@ -458,3 +480,195 @@ Inconclusive consistency comparisons keep the conservative
 - C1-02 Mini-SRS for the 3 pilot modules + golden `c1/validated_requirements.json`
 - C1-04 SRS parser + requirement extraction with stable `REQ` IDs (FR-C1-01)
 - C1-03 Datasets: PURE subset + 40 annotated requirements + 10 contradictory pairs
+
+
+## Internal pair applicability review (no decision effect)
+
+`list-pairs` exports all exhaustive original-text comparisons to a new internal
+JSON snapshot. Every unreviewed pair is `unknown`. These sidecars are never read
+by tier, BDD readiness, refinement or candidate-validation gates.
+
+```powershell
+c1 list-pairs --in <validated_requirements.json> --srs <original-srs> --out <pairs-001.json>
+c1 review-pairs --in <validated_requirements.json> --srs <original-srs> --previous <pairs-001.json> --actions <pair-actions.json> --out <pairs-002.json>
+```
+
+Actions contain a `decisions` list, for example:
+
+```json
+{"decisions": [{"requirement_ids": ["REQ-EX-001", "REQ-EX-002"], "applicability": "relevant", "reviewer": "reviewer-A", "rationale": "Both obligations govern the same operation."}]}
+```
+
+Allowed applicability values are `relevant`, `not_applicable`, and `unknown`.
+Reviewer identity is explicitly supplied, not authenticated. A nonempty rationale
+is mandatory. Confirmed contradictions cannot be dismissed as `not_applicable`.
+Original comparison outcomes, including `unassessed`, remain unchanged.
+
+Use `--previous` on either command to carry history to a fresh snapshot; old
+files are never overwritten. Keep the snapshots together. Original text,
+current text, document identity, source section and full section hierarchy bind
+reviews; changed inputs reset applicability to `unknown` and preserve old events.
+Paragraph coordinates are provenance rather than identity fingerprints.
+Checksums detect accidental changes; they are not signatures or tamper-proof
+authentication. Output belongs outside the sealed run bundle and shared contract.
+No similarity model or automatic applicability inference is used.
+
+
+## Optional DistilBERT defect diagnostics
+
+```powershell
+c1 diagnose-defects --in <validated_requirements.json> --out <new-diagnostics.json>
+# Optional experimental cutoff; score equality meets the threshold:
+c1 diagnose-defects --in <validated_requirements.json> --out <another-new-file.json> --threshold 0.8
+```
+
+This command explicitly opts into local model inference. It reuses the existing
+adapter and defaults to `models/distilbert-requirement-defects/` in this package.
+`--model-dir <directory>` may select another local copy, but named diagnostics
+require the exact verified Experiment 2 checkpoint/tokenizer asset hashes.
+No downloads or hosted APIs are used. Torch/Transformers must already be installed
+(the package's optional `rag` dependencies include them).
+
+The separate JSON contains requirement IDs, original texts, all five independent
+sigmoid scores, optional threshold-selected labels, checkpoint provenance and
+truncation metadata. Label order remains VAGUE, AMBIGUOUS, INCOMPLETE,
+NON_MEASURABLE, NON_VERIFIABLE. The default token limit is the trained 128 tokens.
+Without a threshold, selected labels are empty and scores require human review;
+this does not mean no defects exist. Scores are not calibrated confidence and
+cutoffs have not been validated. Training used 36 provisional AI-assisted records.
+Results are experimental and advisory only; deterministic defects, tiers,
+grounding, BDD readiness and human decisions are never modified.
+
+At least 3 GiB available physical RAM is required before loading and each input.
+Windows and Linux memory checks are supported; inability to measure RAM fails
+closed. This is a preflight safeguard, not a guaranteed memory reservation.
+Inputs are processed one at a time; missing checkpoints, low memory or any failed
+prediction publish no diagnostic JSON. Existing outputs are never overwritten.
+Source bytes are checked again before publication. This diagnostic accepts a
+schema-valid JSON artifact; it does not independently authenticate its SRS lineage.
+Do not run real inference until resource use has been approved for your session.
+
+
+## Optional MiniLM requirement similarity diagnostics
+
+From the repository root, after separately approving real local inference:
+
+```powershell
+& .\packages\c1-requirement-quality\.venv\Scripts\c1.exe diagnose-similarity `
+  --in .\packages\c1-requirement-quality\local-inference\kinmail-validated-requirements.json `
+  --out .\packages\c1-requirement-quality\local-inference\kinmail-minilm-similarity-001.json `
+  --threshold 0.8 --batch-size 4 --max-pairs 10000
+```
+
+Optional `--model-dir <directory>` selects an existing local all-MiniLM-L6-v2
+checkpoint. Without it, the command selects cache revision
+`1110a243fdf4706b3f48f1d95db1a4f5529b4d41` under the Hugging Face hub cache
+(`HF_HUB_CACHE`, legacy `HUGGINGFACE_HUB_CACHE`, or `HF_HOME/hub`; otherwise
+`~/.cache/huggingface/hub`). Missing cache assets fail; no revision/model is
+substituted and no download is attempted. SentenceTransformers and its existing
+optional dependencies must already be installed. The existing embedder uses
+`local_files_only=True` and CPU. No DistilBERT or NLI inference is invoked.
+
+The CLI reuses `requirement_pair_diagnostics` and `SentenceTransformersEmbedder`.
+It compares original texts, preserves IDs, source-document metadata, run ID and
+input SHA256, and emits stable ID-sorted unique unordered pairs. Twenty-one
+requirements produce 210 pairs. A standalone validated JSON does not supply an
+authenticated logical document ID; the command preserves the input's identity
+metadata without inventing or independently authenticating missing lineage.
+
+Output includes all pair scores, per-requirement truncation metadata, selected
+candidate pairs, model asset hashes and experimental/advisory flags. The cache
+revision is inferred from its local snapshot path, not remotely authenticated.
+Custom directories have unknown revision unless they match that snapshot layout;
+recorded hashes document actual selected files rather than proving model quality.
+
+Scores are cosine similarity clipped to [0,1], not calibrated probabilities.
+Selection uses unrounded `similarity >= threshold`, including equality. Omit
+`--threshold` for scores only: flags are null and no candidates are selected.
+The inherited `possible_duplicate` flag is only an experimental similarity
+candidate; `selected_candidate` exposes the same flag without asserting a
+duplicate. High similarity can occur for contradictions, and low similarity does
+not prove non-applicability. No automatic merge, deletion, approval, consistency
+classification or applicability decision occurs. Shared contracts and all
+existing deterministic gates remain unchanged.
+
+At least 3 GiB available physical RAM must be measurable before inference.
+This is a preflight check, not a memory reservation; memory can change during a
+run. Batch size defaults to 4 and the pair cap to 10000 (at most 141 requirements
+at that default). Total pair generation/output remains quadratic, not streaming.
+Missing assets, invalid vectors, memory exhaustion and model failures publish no
+diagnostic output. Existing output files are never overwritten; input bytes and
+checkpoint hashes are checked again before publication. Use an output directory
+readable by your normal Windows account. Automated CLI demonstrations use mocked
+embeddings only; real inference requires separate approval.
+
+
+## Groq clarification proposals (explicit cloud opt-in)
+
+```powershell
+c1 propose-clarifications --in <sealed-run>/c1/validated_requirements.json `
+  --srs <original.docx> --requirement-id REQ-EX-017 --requirement-id REQ-EX-020 `
+  --backend groq --out <new-proposals.json> `
+  --defect-diagnostics <saved-distilbert.json> --similarity-diagnostics <saved-minilm.json>
+```
+
+The diagnostic arguments are optional. This command requires the full verified
+run bundle and workflow ancestry, not just an exported standalone JSON copy.
+It reuses GroqGeneratorBackend's HTTP transport. Set GROQ_API_KEY and GROQ_MODEL
+in the ignored package .env or process environment (process values win).
+GROQ_TIMEOUT_SECONDS defaults to 30, bounded to (0,120];
+GROQ_MAX_OUTPUT_TOKENS defaults to 512, bounded to [128,2048]. No model-list
+availability probe, hidden substitution, retry or fallback is performed.
+Availability must be checked separately before an approved live trial.
+
+The command sends selected original quotations, current valid explicitly
+recorded human answers, and bounded advisory diagnostics to Groq. Do not use
+private SRS material without permission to share it with that provider. It does
+not send the complete SRS, all similarity pairs, reviewer identities or local
+model paths. Active answers retain their human-clarification attribution; they
+are not approvals of a generated rewrite. Unknown actors remain unauthenticated.
+The output retains the exact sent context for audit, so protect it as research
+data and do not commit sensitive artifacts.
+
+Limits default to --max-requests 2, --max-evidence-chars 6000 and
+--max-context-chars 12000. Selected IDs must be unique; max requests is bounded
+by 5, evidence characters by 20000 and context characters by 40000. Character
+limits bound serialized context, not exact model tokens. All contexts and saved
+diagnostics are prevalidated before the first request. No silent truncation is
+performed. MiniLM context contains at most three scored pairs for each selected
+requirement; no applicability or consistency decision is inferred from them.
+
+The version-1 internal schema permits at most three questions with reasons and
+supplied evidence/advisory references, explicit unresolved assumptions, a model
+claimed grounding status, and a nullable rewrite. Model grounding claims are
+never authoritative. Unknown IDs/references, malformed or duplicate-key JSON,
+invalid question counts and unsupported numerical suggestions are rejected.
+Unsupported rewrites are removed from the usable proposal and retained as
+rejected diagnostics while independently valid questions survive. Existing
+quality, grounding, consistency and candidate validation functions are reused;
+only cited SRS quotations and cited active human answers may ground a rewrite.
+These conservative checks are not a guarantee against semantic fabrication or
+misleading questions. Every question, rationale and proposal remains untrusted.
+
+HTTP errors, rate limits, timeouts and invalid proposals stop the run without
+publishing a partial output; earlier calls may already have consumed provider
+quota. Existing outputs are never overwritten. The sidecar records input/source
+and diagnostic hashes, model identity, prompt/schema versions, actual sent
+context, token usage when supplied, latency and validation outcomes. Checksums
+bind files but do not authenticate third-party diagnostic authorship.
+
+No questions or rewrites are automatically added to workflow state. A human must
+review the sidecar, explicitly enter accepted questions/answers/candidate text
+in an actions JSON, and invoke the existing `c1 refine` command into a fresh run.
+Approval and all deterministic gates remain independent. The existing
+`generate-candidates --backend groq` interface and its three-field proposal
+format remain supported. Automated tests and the Kinmail demonstration use
+mocked HTTP responses only; live inference needs separate approval.
+
+
+## Guided terminal review
+
+`c1 demo --workspace <fresh-session> --in <verified-artifact>` starts saved-sidecar
+review; `c1 demo --resume <session>` resumes it. New SRS analysis is also supported.
+See [guided CLI usage and recovery](docs/guided-cli.md). No cloud or local model
+execution occurs inside this initial guided workflow.

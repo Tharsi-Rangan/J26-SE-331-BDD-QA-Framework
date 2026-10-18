@@ -24,14 +24,18 @@ def document_identity(source: Path, explicit: str | None = None) -> str:
     return "DOC-" + sha256(str(source.resolve()).casefold().encode("utf-8"))
 
 
-def snapshot_source(c1_dir: Path, source: Path, document_id: str) -> tuple[NIRDocument, dict[str, Any]]:
+def snapshot_source(c1_dir: Path, source: Path, document_id: str, *, stage_progress=None) -> tuple[NIRDocument, dict[str, Any]]:
     """Read original bytes once, then ingest the immutable local snapshot."""
+    if stage_progress: stage_progress("read", "running", "")
     raw = source.read_bytes()
     archived = c1_dir / "internal" / "source" / source.name
     archived.parent.mkdir(parents=True, exist_ok=True)
     with archived.open("xb") as stream:
         stream.write(raw)
     archived.chmod(0o444)
+    if stage_progress:
+        stage_progress("read", "completed", "Source bytes archived")
+        stage_progress("extract", "running", "")
     doc = replace(load_srs_document(archived), source_path=source.resolve())
     payload = asdict(doc)
     payload["source_path"] = str(doc.source_path)
@@ -86,6 +90,19 @@ def verify_source(input_path: Path, supplied_source: Path) -> tuple[str, dict[st
     normalized = (internal / "normalized_ingestion.json").read_bytes()
     if sha256(normalized) != manifest["normalized_sha256"]:
         raise ValueError("Normalized ingestion hash mismatch")
+    if "rag_policy" in manifest:
+        if manifest["rag_policy"] != "c1-initial-rag-v1":
+            raise ValueError("Unsupported RAG grounding policy")
+        for relative, key in (("internal/rag_provenance.json", "rag_provenance_sha256"),
+                              ("rag_diagnostics.json", "rag_diagnostics_sha256")):
+            if sha256((input_path.parent / relative).read_bytes()) != manifest.get(key):
+                raise ValueError("RAG provenance or diagnostics hash mismatch")
+        provenance = json.loads((internal / "rag_provenance.json").read_text(encoding="utf-8"))
+        if (provenance.get("status") != "completed" or provenance.get("policy") != manifest["rag_policy"]
+                or provenance.get("input_sha256") != manifest["artifact_sha256"]
+                or provenance.get("source_sha256") != manifest["sha256"]
+                or provenance.get("normalized_sha256") != manifest["normalized_sha256"]):
+            raise ValueError("RAG input/source binding mismatch")
     if "workflow_sha256" in manifest:
         workflow = internal / "workflow_snapshot.json"
         if not workflow.is_file() or sha256(workflow.read_bytes()) != manifest["workflow_sha256"]:
@@ -95,6 +112,12 @@ def verify_source(input_path: Path, supplied_source: Path) -> tuple[str, dict[st
         raise ValueError("Artifact source filename does not match its manifest")
     payload = json.loads(normalized.decode("utf-8"))
     return payload["raw_text"], manifest
+
+
+def require_refinement_grounding(manifest: dict[str, Any]) -> None:
+    """Do not downgrade an authoritative initial RAG run to lexical refinement."""
+    if manifest.get("rag_policy") == "c1-initial-rag-v1":
+        raise ValueError("RAG refinement integration is pending; this initial RAG run is inspection-only. No refinement or approval was published.")
 
 
 def copy_source_bundle(input_path: Path, c1_dir: Path, manifest: dict[str, Any],

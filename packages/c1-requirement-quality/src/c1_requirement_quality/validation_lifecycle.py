@@ -11,9 +11,10 @@ from c1_requirement_quality.grounding_analyser import analyse_grounding
 from c1_requirement_quality.quality_analyser import analyse_requirement
 from c1_requirement_quality.consistency_analyser import analyse_consistency, consistency_for_requirement
 from c1_requirement_quality.tier_classifier import classify_tier
+from c1_requirement_quality.lexical_patterns import PLACEHOLDER_PATTERN
 
 POLICY_VERSION = "c1-validation-1b3-v1"
-PLACEHOLDER = re.compile(r"\[[^\]]+\]|\bTBD\b|\bTBC\b", re.I)
+PLACEHOLDER = PLACEHOLDER_PATTERN
 DURATION_ANSWER = re.compile(r"(?:(?:within|at least|at most|less than|no more than|up to)\s+)?\d+(?:\.\d+)?\s*(?:ms|milliseconds?|seconds?|minutes?|hours?|days?)\.?", re.I)
 
 
@@ -26,7 +27,8 @@ def original_assessments(artifact: dict[str, Any], source_text: str | None = Non
         baseline["basis"] = "original_snapshot_observation"
         if row["final_text"] != row["original_text"] and source_text is not None:
             findings = analyse_requirement(row["original_text"])
-            grounding = analyse_grounding(row["original_text"], source_text)
+            grounding = analyse_grounding(row["original_text"], source_text,
+                source_format="docx" if artifact.get("source_document", {}).get("name", "").lower().endswith(".docx") else None)
             consistency = consistency_for_requirement(row["requirement_id"], analysis)
             baseline.update(defects=findings, grounding=grounding, consistency=consistency,
                             tier=classify_tier(findings, grounding, consistency)["tier"],
@@ -90,8 +92,8 @@ def clarification_resolution(record: dict[str, Any] | None, original: str,
 
 
 def grounded_current(text: str, srs_text: str, original: str | None = None,
-                     record: dict[str, Any] | None = None) -> dict[str, Any]:
-    source = analyse_grounding(text, srs_text)
+                     record: dict[str, Any] | None = None, *, source_format: str | None = None) -> dict[str, Any]:
+    source = analyse_grounding(text, srs_text, source_format=source_format)
     result = copy.deepcopy(source)
     result.update(srs_evidence=copy.deepcopy(source["evidence"]), human_clarification_evidence=[],
                   original_srs_status=source["status"])
@@ -114,7 +116,7 @@ def grounded_current(text: str, srs_text: str, original: str | None = None,
         if span is not None and span in scaffold:
             scaffold = scaffold.replace(span, answer["answer"])
             used.append(item)
-    original_support = analyse_grounding(original, srs_text)
+    original_support = analyse_grounding(original, srs_text, source_format=source_format)
     method = None
     if (used and normal(scaffold) == normal(text) and not PLACEHOLDER.search(scaffold)
             and original_support["status"] == "supported"):
@@ -178,4 +180,8 @@ def validation_signature(text: str, row: dict[str, Any], source: str,
                "answers": record.get("answers", []) if record else [],
                "escalation_active": record.get("escalation_active", False) if record else False,
                "clarification_requested": record.get("clarification_requested", False) if record else False}
+    if record and "consistency_review_basis" in record:
+        from c1_requirement_quality.effective_consistency import POLICY
+        payload["consistency_review_policy"] = POLICY
+        payload["consistency_review_basis"] = record["consistency_review_basis"]
     return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()

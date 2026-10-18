@@ -197,3 +197,24 @@ def test_human_review_does_not_override_independent_analysis_gates():
     assert any(r["kind"] == "grounding_insufficient" for r in unsupported["reasons"])
     assert conflict["tier"] == TIER_3
     assert conflict["reasons"][0]["kind"] == "confirmed_requirement_conflict"
+
+
+def test_tier_explanations_distinguish_actual_blockers():
+    unresolved = _consistency("potential_conflict", pairs=[{
+        "requirement_ids": ["REQ-EX-001", "REQ-EX-002"],
+        "classification": "unassessed", "analysis_state": "unassessed"}], check="skipped")
+    result = classify_tier([], _grounding(), unresolved)
+    assert result["tier"] == TIER_2
+    assert "consistency" in result["explanation"] and "unassessed" in result["explanation"]
+    assert "quality defect" not in result["explanation"].lower()
+    assert "awaits" not in result["explanation"]
+    missing = classify_tier([], _grounding("unsupported", evidence=False), _consistency())
+    assert "Grounding" in missing["explanation"] and "quality defect" not in missing["explanation"]
+    defect = classify_tier([{"type": "vague"}], _grounding(), _consistency())
+    assert "quality defects" in defect["explanation"]
+    waiting = classify_tier([], _grounding(), _consistency(), original_text="The system responds.", candidate_text="The system shall respond.")
+    assert "explicit human review decision" in waiting["explanation"]
+    question = classify_tier([], _grounding(), _consistency(), unresolved_clarification=True)
+    assert "clarification questions" in question["explanation"]
+    conflict = classify_tier([], _grounding(), _consistency("conflict", check="fail"))
+    assert conflict["tier"] == TIER_3 and "supported contradiction" in conflict["explanation"]

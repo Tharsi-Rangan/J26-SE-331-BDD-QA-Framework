@@ -489,15 +489,12 @@ def test_ranking_tie_broken_deterministically():
 
 
 # T-22: Lexical fallback recorded when RAG unavailable
-def test_lexical_fallback_recorded_when_rag_unavailable():
+def test_rag_candidate_validation_rejected_before_generation():
     srs = "The service shall respond within 2 seconds."
     req = _req("REQ-EX-001", "The service shall respond within 2 seconds.")
     artifact = _minimal_artifact([req])
-    sidecar = generate_candidate_suggestions(artifact, srs, grounding_mode="rag")
-
-    gen_meta = sidecar["generator"]
-    assert gen_meta["grounding_mode_requested"] == "rag"
-    assert gen_meta["grounding_mode_used"] == "lexical"
+    with pytest.raises(ValueError, match="only lexical"):
+        generate_candidate_suggestions(artifact, srs, grounding_mode="rag")
 
 
 # T-23: Human-confirmed substitution is NOT rejected due to SRS absence

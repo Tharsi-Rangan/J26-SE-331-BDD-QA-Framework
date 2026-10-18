@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import pytest
 
 from c1_requirement_quality.rag.fact_extractor import extract_facts
 from c1_requirement_quality.rag.verifier import (
@@ -102,3 +103,65 @@ def test_nli_model_load_failure_names_component_and_model():
     assert result.component == "nli"
     assert result.model_name == "cross-encoder/test-model"
     assert "weights are not cached" in result.diagnostic
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_symbolic_support_cannot_hide_contradictory_passage(reverse):
+    fact = extract_facts("The system shall allow login.", use_spacy=False)[0]
+    evidence = [Evidence("support", fact.text),
+                Evidence("conflict", "The system shall not allow login.")]
+    result = FactVerifier().verify(fact, list(reversed(evidence)) if reverse else evidence)
+    assert result.outcome is VerificationOutcome.CONTRADICTED
+    assert set(result.evidence_ids) == {"support", "conflict"}
+    assert dict(result.evidence_outcomes) == {"support": "SUPPORTED", "conflict": "CONTRADICTED"}
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_nli_aggregates_all_passages_and_attributes_only_matched_evidence(reverse):
+    class PerPassageNLI:
+        def classify(self, premise, hypothesis):
+            return {"allows access": "entailment", "denies access": "contradiction",
+                    "unrelated topic": "neutral"}[premise]
+
+    fact = extract_facts("Users can sign in.", use_spacy=False)[0]
+    evidence = [Evidence("support", "allows access"), Evidence("conflict", "denies access"),
+                Evidence("neutral", "unrelated topic")]
+    result = FactVerifier(PerPassageNLI()).verify(fact, list(reversed(evidence)) if reverse else evidence)
+    assert result.outcome is VerificationOutcome.CONTRADICTED
+    assert set(result.evidence_ids) == {"support", "conflict"}
+    assert dict(result.evidence_outcomes)["neutral"] == "INCONCLUSIVE"
+
+
+def test_symbolic_support_does_not_skip_nli_contradiction():
+    fact = extract_facts("The system shall allow login.", use_spacy=False)[0]
+    result = FactVerifier(FakeNLI("contradiction")).verify(fact, [
+        Evidence("support", fact.text), Evidence("conflict", "Access is forbidden.")])
+    assert result.outcome is VerificationOutcome.CONTRADICTED
+    assert dict(result.evidence_outcomes) == {"support": "SUPPORTED", "conflict": "CONTRADICTED"}
+
+
+def test_neutral_passage_is_not_attributed_as_support():
+    class PerPassageNLI:
+        def classify(self, premise, hypothesis):
+            return "entailment" if premise == "Access is allowed." else "neutral"
+
+    fact = extract_facts("Users can sign in.", use_spacy=False)[0]
+    result = FactVerifier(PerPassageNLI()).verify(fact, [
+        Evidence("support", "Access is allowed."), Evidence("neutral", "Audit logging.")])
+    assert result.outcome is VerificationOutcome.SUPPORTED
+    assert result.evidence_ids == ("support",)
+
+
+def test_partial_inference_failure_preserves_conflict_and_prevents_success():
+    class BrokenNLI:
+        def classify(self, premise, hypothesis):
+            raise RuntimeError("failed passage")
+
+    fact = extract_facts("The system shall allow login.", use_spacy=False)[0]
+    result = FactVerifier(BrokenNLI()).verify(fact, [
+        Evidence("support", fact.text), Evidence("error", "Other wording."),
+        Evidence("conflict", "The system shall not allow login.")])
+    assert result.outcome is VerificationOutcome.ERROR
+    assert "failed passage" in result.diagnostic
+    assert dict(result.evidence_outcomes) == {
+        "support": "SUPPORTED", "error": "ERROR", "conflict": "CONTRADICTED"}
