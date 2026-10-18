@@ -1847,7 +1847,7 @@ def test_stage4h4b_evidence_verification_flow_and_premise_hypothesis_ordering(ap
 
 
 def test_stage4h4b_symbolic_vs_nli_separation(app, tmp_path):
-    """Exact passages use symbolic checks; remaining passages still receive NLI."""
+    """Exact passages use symbolic checks; unresolved placeholders cannot support NLI."""
     ui, messages = app
     source = tmp_path / "srs.md"
     source.write_text(
@@ -1874,12 +1874,9 @@ def test_stage4h4b_symbolic_vs_nli_separation(app, tmp_path):
     ui.ask = scripted(["7", "1", "5"])
     ui.candidates(session, rid)
 
-    # Exact support must not short-circuit verification of the other passage.
-    assert mock_nli.calls == [{
-        "premise": "1. The system shall retain logs for [purpose].",
-        "hypothesis": exact_text,
-    }]
-    assert any("Verification Method: mixed" in m for m in messages)
+    # Exact support remains valid; the placeholder passage abstains before NLI.
+    assert mock_nli.calls == []
+    assert any("Deterministic symbolic verification" in m for m in messages)
     assert any("Outcome: SUPPORTED" in m for m in messages)
 
 

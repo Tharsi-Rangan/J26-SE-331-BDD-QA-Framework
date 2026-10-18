@@ -16,14 +16,14 @@ OPERATOR_PATTERN = re.compile(
     re.IGNORECASE,
 )
 UNITS_PATTERN = re.compile(
-    r"\b(?:years|year|old|characters|char|chars|seconds|sec|secs|minutes|min|mins|hours|percent|%|users|attempts|bytes|MB|GB)\b",
+    r"\b(?:years|year|days|day|old|characters|char|chars|seconds|sec|secs|minutes|min|mins|hours|percent|%|users|attempts|bytes|MB|GB)\b",
     re.IGNORECASE,
 )
 CONSTRAINT_PATTERN = re.compile(
     r"(?P<operator>between|at least|at most|less than|greater than|more than|up to|minimum of|maximum of|>=|<=|>|<|=)\s*"
     r"(?P<first>\d+(?:\.\d+)?)"
     r"(?:\s+and\s+(?P<second>\d+(?:\.\d+)?))?"
-    r"(?:\s+(?:failed|unsuccessful)\s*)?(?:\s*(?P<unit>years?|old|characters?|chars?|seconds?|secs?|minutes?|mins?|hours?|percent|%|users|attempts|bytes|units?|MB|GB))?",
+    r"(?:\s+(?:failed|unsuccessful)\s*)?(?:\s*(?P<unit>years?|days?|old|characters?|chars?|seconds?|secs?|minutes?|mins?|hours?|percent|%|users|attempts|bytes|units?|MB|GB))?",
     re.IGNORECASE,
 )
 CONDITION_PATTERN = re.compile(

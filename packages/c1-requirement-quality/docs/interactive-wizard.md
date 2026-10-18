@@ -2,6 +2,30 @@
 
 ## Phase 2, Step 3: mandatory initial RAG grounding
 
+Step 3B.1 adds a conservative applicability check. Exact symbolic evidence and
+narrow numeric contradictions remain authoritative. An NLI judgment can establish
+support/contradiction only when an explicit obligation signature matches, retaining
+actors, objects, conditions, units, quantities and entity numbers. Numbered-list
+prefixes, shall/must and polarity are the only applicability normalizations. No
+cosine cutoff or semantic non-applicability claim is introduced. Unknown NLI
+contradictions remain visible and make the claim inconclusive even if another
+passage supports it; an applicable contradiction still takes precedence. This
+can conservatively block paraphrases pending human review. Per-passage
+`evidence_assessments` retain raw NLI labels, applicability and effective outcomes.
+
+Bracketed placeholders, TBD/TBC and explicit to-be-determined/defined/decided
+markers abstain before symbolic/NLI support, in both claims and evidence. A
+statement containing its own placeholder does not establish the missing fact.
+Quality findings remain separate. The fact extractor explicitly recognizes day
+units so same-obligation retention bounds can use existing numeric verification.
+
+After initial RAG, owned CPU model references and indexed embeddings are released
+and cyclic objects collected before DistilBERT. The sealed RAG provenance includes
+available-memory observations before RAG, after inference and after release.
+This does not guarantee allocator/OS memory recovery. The existing 3 GiB guard
+still controls whether the mandatory DistilBERT stage may run; insufficient memory
+continues to leave the analysis incomplete. Resume does not reload released models.
+
 New numbered-wizard imports now select the existing RAG grounding service before
 tier classification. One document index is reused for all requirements. Existing
 rule-based fact extraction is explicitly selected (`use_spacy=False`); MiniLM

@@ -6,11 +6,13 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
 from typing import Any
+import re
 
 from c1_requirement_quality.rag.fact_extractor import Fact, extract_facts
 from c1_requirement_quality.rag.model_loading import RAGModelLoadError
 from c1_requirement_quality.model_paths import DEBERTA_NLI_MODEL_NAME, get_deberta_nli_cache_dir
 from c1_requirement_quality.lexical_patterns import COMPARISON_TOKEN_PATTERN
+from c1_requirement_quality.lexical_patterns import PLACEHOLDER_PATTERN
 
 
 class VerificationOutcome(str, Enum):
@@ -29,6 +31,7 @@ class VerificationResult:
     component: str | None = None
     model_name: str | None = None
     evidence_outcomes: tuple[tuple[str, str], ...] = ()
+    evidence_assessments: tuple[dict[str, Any], ...] = ()
 
 
 class LocalNLI:
@@ -83,7 +86,28 @@ class LocalNLI:
 
 
 def _tokens(text: str) -> tuple[str, ...]:
+    # Ignore only a structural numbered-list prefix, never factual numbers.
+    text = re.sub(r"^\s*\d+[.)]\s+", "", text)
     return tuple(COMPARISON_TOKEN_PATTERN.findall(text.lower()))
+
+
+def _incomplete(text: str) -> bool:
+    return bool(PLACEHOLDER_PATTERN.search(text) or re.search(
+        r"\bto be (?:determined|defined|decided)\b", text, re.I))
+
+
+def evidence_applicability(fact: Fact, evidence: str) -> str:
+    """A narrow same-obligation basis, not a similarity/relevance threshold.
+
+    Preserve actor, predicate, object, units and condition wording. Only list
+    prefixes, obligation modals and negation are normalized. Numeric values,
+    comparisons and entity identifiers remain literal. Unknown paraphrases remain uncertain, never excluded as
+    irrelevant or silently declared consistent.
+    """
+    def signature(text):
+        return tuple(t for t in _tokens(text) if t not in {
+            "shall", "must", "not", "no", "never", "cannot", "can't", "mustn't", "won't"})
+    return "APPLICABLE" if signature(fact.text) and signature(fact.text) == signature(evidence) else "UNCERTAIN"
 
 
 def _content_signature(text: str) -> tuple[str, ...]:
@@ -147,6 +171,8 @@ def _interval_subset(
 
 def verify_symbolically(fact: Fact, evidence: str, evidence_id: str) -> VerificationResult:
     """Use exact and tightly matched attribute checks; otherwise abstain."""
+    if _incomplete(fact.text) or _incomplete(evidence):
+        return VerificationResult(VerificationOutcome.INCONCLUSIVE, diagnostic="Unresolved placeholder or missing information")
     if _tokens(fact.text) == _tokens(evidence):
         return VerificationResult(VerificationOutcome.SUPPORTED, (evidence_id,))
     # Opposite polarity is only actionable when the token content otherwise matches.
@@ -200,18 +226,27 @@ class FactVerifier:
         if not evidence:
             return VerificationResult(VerificationOutcome.INCONCLUSIVE, diagnostic="No evidence retrieved")
         results: list[tuple[str, VerificationResult]] = []
+        assessments: list[dict[str, Any]] = []
+        uncertain_contradiction = False
         for item in evidence:
             evidence_id = str(item.chunk_id)
             symbolic = verify_symbolically(fact, item.text, evidence_id)
             result = symbolic
-            if symbolic.outcome is VerificationOutcome.INCONCLUSIVE and self.nli is not None:
+            applicability = "APPLICABLE" if symbolic.outcome in {VerificationOutcome.SUPPORTED, VerificationOutcome.CONTRADICTED} else evidence_applicability(fact, item.text)
+            raw_label = None
+            incomplete = _incomplete(fact.text) or _incomplete(item.text)
+            if symbolic.outcome is VerificationOutcome.INCONCLUSIVE and self.nli is not None and not incomplete:
                 try:
                     label = self.nli.classify(item.text, fact.text).lower()
+                    raw_label = label
                     outcome = (
                         VerificationOutcome.SUPPORTED if label in {"entailment", "entails", "supported"}
                         else VerificationOutcome.CONTRADICTED if label in {"contradiction", "contradicts"}
                         else VerificationOutcome.INCONCLUSIVE
                     )
+                    if applicability != "APPLICABLE":
+                        uncertain_contradiction |= outcome is VerificationOutcome.CONTRADICTED
+                        outcome = VerificationOutcome.INCONCLUSIVE
                     result = VerificationResult(outcome, (evidence_id,), "nli",
                         model_name=getattr(self.nli, "loaded_model_name", None))
                 except (ImportError, OSError, RuntimeError, ValueError, KeyError) as err:
@@ -219,6 +254,11 @@ class FactVerifier:
                         getattr(err, "component", "nli"),
                         getattr(err, "model_name", getattr(self.nli, "model_name", None)))
             results.append((evidence_id, result))
+            assessments.append({"chunk_id": evidence_id, "applicability": "INCOMPLETE" if incomplete else applicability,
+                "raw_nli_label": raw_label, "outcome": result.outcome.value,
+                "reason": "Unresolved placeholder/missing information" if incomplete else
+                    "Matching explicit obligation signature" if applicability == "APPLICABLE" else
+                    "Applicability not established; raw NLI cannot establish factual support or contradiction"})
 
         # Inspect every retrieved passage. Errors prevent success; contradiction
         # takes precedence over support, regardless of retrieval order.
@@ -227,15 +267,20 @@ class FactVerifier:
             VerificationOutcome.ERROR, VerificationOutcome.CONTRADICTED,
             VerificationOutcome.SUPPORTED, VerificationOutcome.INCONCLUSIVE,
         ) if state in states)
+        if outcome is VerificationOutcome.SUPPORTED and uncertain_contradiction:
+            outcome = VerificationOutcome.INCONCLUSIVE
         decisive = [result for _, result in results if result.outcome is outcome]
         attributed = tuple(dict.fromkeys(eid for eid, result in results
             if result.outcome in {VerificationOutcome.SUPPORTED, VerificationOutcome.CONTRADICTED}))
         methods = {result.method for result in decisive}
         diagnostics = [result.diagnostic for _, result in results if result.diagnostic]
+        if uncertain_contradiction:
+            diagnostics.append("NLI contradiction with uncertain evidence applicability requires review")
         if outcome is VerificationOutcome.INCONCLUSIVE and self.nli is None:
             diagnostics.append("No NLI classifier configured")
         return VerificationResult(
             outcome, attributed, next(iter(methods)) if len(methods) == 1 else "mixed",
             "; ".join(diagnostics) or None, decisive[0].component, decisive[0].model_name,
             tuple((eid, result.outcome.value) for eid, result in results),
+            tuple(assessments),
         )

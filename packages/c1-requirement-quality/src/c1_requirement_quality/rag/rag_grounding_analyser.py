@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 import hashlib
 import json
+import gc
 
 from c1_requirement_quality.rag.fact_extractor import Fact, extract_facts
 from c1_requirement_quality.rag.retriever import DenseRetriever
@@ -28,6 +29,19 @@ class RAGGroundingAnalyser:
         self.top_k = top_k
         self.use_spacy = use_spacy
         self._embedding_load_error: RAGModelLoadError | None = None
+
+    def release(self) -> int:
+        """Release finished CPU inference resources; allocator recovery is not guaranteed."""
+        from c1_requirement_quality.rag.retriever import SentenceTransformersEmbedder
+        embedder = self.retriever._embedder
+        if isinstance(embedder, SentenceTransformersEmbedder):
+            embedder._model = None
+        self.retriever._embedder = None
+        self.retriever._indexed_chunks = None
+        if isinstance(self.verifier.nli, LocalNLI):
+            self.verifier.nli._pipeline = None
+        del embedder
+        return gc.collect()
 
     def model_provenance(self) -> dict[str, Any]:
         """Validate configured local assets and record hashes without downloading.
@@ -129,6 +143,7 @@ class RAGGroundingAnalyser:
                     {"chunk_id": chunk_id, "outcome": outcome}
                     for chunk_id, outcome in result.evidence_outcomes
                 ],
+                "evidence_assessments": list(result.evidence_assessments),
                 "retrieved_evidence": [{**candidate.to_dict(),
                     "start_line": candidate.start_line, "end_line": candidate.end_line}
                     for candidate in candidates],

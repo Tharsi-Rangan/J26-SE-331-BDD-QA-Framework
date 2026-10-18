@@ -82,3 +82,24 @@ def test_analyser_retains_support_and_conflict_without_promoting_grounding():
     assert result["diagnostics"][0]["evidence_outcomes"] == [
         {"chunk_id": "support", "outcome": "SUPPORTED"},
         {"chunk_id": "conflict", "outcome": "CONTRADICTED"}]
+
+
+def test_release_drops_model_cycles_and_indexed_embeddings():
+    import weakref
+    from c1_requirement_quality.rag.retriever import SentenceTransformersEmbedder
+    from c1_requirement_quality.rag.verifier import LocalNLI
+    class Model:
+        pass
+    embedder = SentenceTransformersEmbedder()
+    nli = LocalNLI()
+    model, pipeline = Model(), Model()
+    model.cycle, pipeline.cycle = model, pipeline
+    model_ref, pipeline_ref = weakref.ref(model), weakref.ref(pipeline)
+    embedder._model, nli._pipeline = model, pipeline
+    del model, pipeline
+    analyser = RAGGroundingAnalyser("Source", embedder=embedder, verifier=FactVerifier(nli), use_spacy=False)
+    analyser.retriever._indexed_chunks = [object()]
+    analyser.release()
+    assert model_ref() is None and pipeline_ref() is None
+    assert analyser.retriever._indexed_chunks is None and analyser.retriever._embedder is None
+    assert nli._pipeline is None and embedder._model is None

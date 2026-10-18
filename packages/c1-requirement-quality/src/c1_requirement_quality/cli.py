@@ -267,6 +267,8 @@ def _run_staged(
     if progress: progress("Grounding...")
     rag_analyser = None
     rag_provenance = None
+    rag_loaded_models = []
+    rag_memory = {}
     try:
         rag_analyser = (
             RAGGroundingAnalyser(srs_text, use_spacy=False) if mandatory_rag else
@@ -274,8 +276,8 @@ def _run_staged(
             if grounding_mode == "rag" else None
         )
         if mandatory_rag:
-            from c1_requirement_quality.ml.ml_diagnostics import _require_memory
-            _require_memory()
+            from c1_requirement_quality.ml.ml_diagnostics import _require_memory, available_memory_bytes
+            rag_memory["before_bytes"] = _require_memory()
             rag_provenance = rag_analyser.model_provenance()
         grounding_results: list[dict[str, object]] = [
             (rag_analyser.analyse(str(r["original_text"])) if rag_analyser else
@@ -297,11 +299,22 @@ def _run_staged(
                 raise RuntimeError("; ".join(errors))
             if rag_analyser.model_provenance() != rag_provenance:
                 raise RuntimeError("RAG model assets changed during analysis")
+            rag_loaded_models = list(rag_analyser.loaded_model_names)
+            rag_memory["after_inference_bytes"] = available_memory_bytes()
     except Exception as error:
         if mandatory_rag:
             if stage_progress: stage_progress("grounding", "failed", str(error))
             raise ValueError(f"Mandatory RAG grounding incomplete: {type(error).__name__}: {error}") from error
         raise
+    finally:
+        if mandatory_rag and rag_analyser is not None:
+            rag_memory["collected_objects"] = rag_analyser.release()
+            # Profiling must not mask an earlier model/verification failure.
+            try:
+                from c1_requirement_quality.ml.ml_diagnostics import available_memory_bytes
+                rag_memory["after_release_bytes"] = available_memory_bytes()
+            except Exception as memory_error:
+                rag_memory["measurement_error"] = str(memory_error)
     if stage_progress:
         stage_progress("grounding", "completed", "Implemented checks finished; uncertainty remains reviewable")
         stage_progress("tier", "running", "")
@@ -462,7 +475,7 @@ def _run_staged(
         metadata = {"policy": "c1-initial-rag-v1", "status": "completed",
             "input_sha256": sha256(validated_output_path.read_bytes()),
             "source_sha256": manifest["sha256"], "normalized_sha256": manifest["normalized_sha256"],
-            "models": rag_provenance, "loaded_models": list(rag_analyser.loaded_model_names),
+            "models": rag_provenance, "loaded_models": rag_loaded_models, "memory": rag_memory,
             "scope": "initial original requirements only; refinement publication blocked"}
         metadata_path = c1_dir / "internal/rag_provenance.json"
         metadata_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

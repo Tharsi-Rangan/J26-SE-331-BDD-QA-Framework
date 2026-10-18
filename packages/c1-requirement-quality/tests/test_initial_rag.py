@@ -51,6 +51,12 @@ def app(tmp_path, monkeypatch):
             if control.get("constructor_error"):
                 raise RuntimeError("RAG index initialization failed")
             super().__init__(text, embedder=Embedder(), verifier=FactVerifier(NLI()), use_spacy=False)
+            # Isolate applicable NLI evidence from exact self-matches for these
+            # outcome-mapping tests; both passages exist in the fixture source.
+            self.retriever.retrieve = lambda query, *a: [RetrievalResult(
+                "SRS-L0002" if "retain" in query else "SRS-L0004",
+                "The system must retain logs." if "retain" in query else "The system must allow login.",
+                "Evidence", 0.9, 2 if "retain" in query else 4, 2 if "retain" in query else 4)]
             if control.get("mixed"):
                 self.retriever.retrieve = lambda *a: [
                     RetrievalResult("support", "The system shall retain logs.", "Policy", 0.9, 1, 1),
@@ -67,7 +73,7 @@ def app(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cli, "RAGGroundingAnalyser", InitialRAG)
     source = tmp_path / "srs.md"
-    source.write_text("# Requirements\n1. The system shall retain logs.\n2. The system shall allow login.\n")
+    source.write_text("# Evidence\nThe system must retain logs.\n\nThe system must allow login.\n\n# Requirements\n1. The system shall retain logs.\n2. The system shall allow login.\n")
     messages = []
     ui = wizard.Wizard(tmp_path / "sessions", tell=messages.append, classifier=Classifier())
     return ui, source, control, messages
@@ -200,3 +206,36 @@ def test_local_nli_provenance_checks_assets_and_label_mapping(tmp_path, monkeypa
         assert metadata["asset_sha256"]["model.safetensors"] == hashlib.sha256(
             (tmp_path / "model.safetensors").read_bytes()).hexdigest()
         assert metadata["label_mapping"] == config["id2label"]
+
+
+@pytest.mark.parametrize("recovered", [True, False])
+def test_rag_release_precedes_ml_and_does_not_bypass_memory_guard(app, monkeypatch, recovered):
+    from c1_requirement_quality.ml import ml_diagnostics
+    ui, source, control, _ = app
+    events = []
+    original_release = RAGGroundingAnalyser.release
+    original_classify = Classifier.classify
+    def release(self):
+        count = original_release(self)
+        events.append("release")
+        return count
+    def classify(self, *args, **kwargs):
+        assert "release" in events
+        events.append("ml")
+        return original_classify(self, *args, **kwargs)
+    monkeypatch.setattr(RAGGroundingAnalyser, "release", release)
+    monkeypatch.setattr(Classifier, "classify", classify)
+    monkeypatch.setattr(ml_diagnostics, "available_memory_bytes",
+        lambda: (2 if not recovered and "release" in events else 4) * 1024**3)
+    if recovered:
+        session = ui.create(source)
+        metadata = json.loads((session.current.parent / "internal/rag_provenance.json").read_text())
+        assert metadata["memory"]["after_release_bytes"] == 4 * 1024**3
+        assert events == ["release", "ml", "ml"]
+    else:
+        with pytest.raises(ValueError, match="at least 3 GiB required"):
+            ui.create(source)
+        assert events == ["release"]
+        workspace = next(ui.root.glob("session-*"))
+        assert json.loads((workspace / "ml_failure.json").read_text())["status"] == "incomplete"
+        assert not (workspace / "ml_analysis.json").exists()
