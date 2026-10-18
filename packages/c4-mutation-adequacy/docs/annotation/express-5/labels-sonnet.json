@@ -39,10 +39,7 @@
     "mutant_id": "6",
     "requirement_id": "REQ-EXPRESS-003",
     "scenario_id": "SCN-EXPRESS-003-01",
-    "test_ids": [
-      "TST-EXPRESS-003-01-01",
-      "TST-EXPRESS-003-01-02"
-    ],
+    "test_ids": ["TST-EXPRESS-003-01-01", "TST-EXPRESS-003-01-02"],
     "gap_type": "equivalent",
     "confidence": "medium",
     "note": "A string body gives the same hash as a Buffer made from it."
@@ -51,10 +48,7 @@
     "mutant_id": "17",
     "requirement_id": "REQ-EXPRESS-001",
     "scenario_id": "SCN-EXPRESS-001-02",
-    "test_ids": [
-      "TST-EXPRESS-001-01-02",
-      "TST-EXPRESS-001-02-01"
-    ],
+    "test_ids": ["TST-EXPRESS-001-01-02", "TST-EXPRESS-001-02-01"],
     "gap_type": "untested_branch",
     "confidence": "high",
     "note": "No test uses a path where only one of the two drive-letter checks is true."
@@ -63,10 +57,7 @@
     "mutant_id": "18",
     "requirement_id": "REQ-EXPRESS-001",
     "scenario_id": "SCN-EXPRESS-001-02",
-    "test_ids": [
-      "TST-EXPRESS-001-01-02",
-      "TST-EXPRESS-001-02-01"
-    ],
+    "test_ids": ["TST-EXPRESS-001-01-02", "TST-EXPRESS-001-02-01"],
     "gap_type": "untested_branch",
     "confidence": "high",
     "note": "No test has a path with a backslash at index 2 but no colon at index 1."
@@ -75,10 +66,7 @@
     "mutant_id": "21",
     "requirement_id": "REQ-EXPRESS-001",
     "scenario_id": "SCN-EXPRESS-001-02",
-    "test_ids": [
-      "TST-EXPRESS-001-01-02",
-      "TST-EXPRESS-001-02-01"
-    ],
+    "test_ids": ["TST-EXPRESS-001-01-02", "TST-EXPRESS-001-02-01"],
     "gap_type": "untested_branch",
     "confidence": "high",
     "note": "No test has a path with a colon at index 1 but no backslash at index 2."
@@ -87,9 +75,7 @@
     "mutant_id": "26",
     "requirement_id": "REQ-EXPRESS-001",
     "scenario_id": "SCN-EXPRESS-001-01",
-    "test_ids": [
-      "TST-EXPRESS-001-02-01"
-    ],
+    "test_ids": ["TST-EXPRESS-001-02-01"],
     "gap_type": "untested_branch",
     "confidence": "high",
     "note": "No test uses a UNC path, so the true side of line 71 never runs."
@@ -98,9 +84,7 @@
     "mutant_id": "28",
     "requirement_id": "REQ-EXPRESS-001",
     "scenario_id": "SCN-EXPRESS-001-01",
-    "test_ids": [
-      "TST-EXPRESS-001-02-01"
-    ],
+    "test_ids": ["TST-EXPRESS-001-02-01"],
     "gap_type": "untested_branch",
     "confidence": "high",
     "note": "No test uses a UNC path or an empty path to expose the empty prefix."
@@ -109,9 +93,7 @@
     "mutant_id": "29",
     "requirement_id": "REQ-EXPRESS-001",
     "scenario_id": "SCN-EXPRESS-001-01",
-    "test_ids": [
-      "TST-EXPRESS-001-02-01"
-    ],
+    "test_ids": ["TST-EXPRESS-001-02-01"],
     "gap_type": "untested_branch",
     "confidence": "high",
     "note": "No test uses a UNC path to show that the whole path is compared instead of the prefix."
@@ -147,9 +129,7 @@
     "mutant_id": "47",
     "requirement_id": "REQ-EXPRESS-002",
     "scenario_id": "SCN-EXPRESS-002-02",
-    "test_ids": [
-      "TST-EXPRESS-002-02-01"
-    ],
+    "test_ids": ["TST-EXPRESS-002-02-01"],
     "gap_type": "untested_branch",
     "confidence": "medium",
     "note": "No test uses a type with no space after the semicolon."
@@ -158,9 +138,7 @@
     "mutant_id": "49",
     "requirement_id": "REQ-EXPRESS-002",
     "scenario_id": "SCN-EXPRESS-002-02",
-    "test_ids": [
-      "TST-EXPRESS-002-02-01"
-    ],
+    "test_ids": ["TST-EXPRESS-002-02-01"],
     "gap_type": "weak_assertion",
     "confidence": "high",
     "note": "The test only checks that quality is defined, and it has the default value 1."
@@ -169,9 +147,7 @@
     "mutant_id": "51",
     "requirement_id": "REQ-EXPRESS-002",
     "scenario_id": "SCN-EXPRESS-002-02",
-    "test_ids": [
-      "TST-EXPRESS-002-02-01"
-    ],
+    "test_ids": ["TST-EXPRESS-002-02-01"],
     "gap_type": "weak_assertion",
     "confidence": "high",
     "note": "The test only checks that quality is defined, and it has the default value 1."
@@ -180,9 +156,7 @@
     "mutant_id": "53",
     "requirement_id": "REQ-EXPRESS-002",
     "scenario_id": "SCN-EXPRESS-002-02",
-    "test_ids": [
-      "TST-EXPRESS-002-02-01"
-    ],
+    "test_ids": ["TST-EXPRESS-002-02-01"],
     "gap_type": "weak_assertion",
     "confidence": "high",
     "note": "The test does not check the quality value or the params."
@@ -191,9 +165,7 @@
     "mutant_id": "54",
     "requirement_id": "REQ-EXPRESS-002",
     "scenario_id": "SCN-EXPRESS-002-02",
-    "test_ids": [
-      "TST-EXPRESS-002-02-01"
-    ],
+    "test_ids": ["TST-EXPRESS-002-02-01"],
     "gap_type": "weak_assertion",
     "confidence": "medium",
     "note": "The test does not check that the quality is 0.5."
@@ -202,9 +174,7 @@
     "mutant_id": "55",
     "requirement_id": "REQ-EXPRESS-002",
     "scenario_id": "SCN-EXPRESS-002-02",
-    "test_ids": [
-      "TST-EXPRESS-002-02-01"
-    ],
+    "test_ids": ["TST-EXPRESS-002-02-01"],
     "gap_type": "weak_assertion",
     "confidence": "medium",
     "note": "The test does not check that the quality is 0.5."
@@ -213,9 +183,7 @@
     "mutant_id": "56",
     "requirement_id": "REQ-EXPRESS-002",
     "scenario_id": "SCN-EXPRESS-002-02",
-    "test_ids": [
-      "TST-EXPRESS-002-02-01"
-    ],
+    "test_ids": ["TST-EXPRESS-002-02-01"],
     "gap_type": "untested_branch",
     "confidence": "high",
     "note": "No test has a parameter other than q, so the else branch never runs."
@@ -224,9 +192,7 @@
     "mutant_id": "57",
     "requirement_id": "REQ-EXPRESS-002",
     "scenario_id": "SCN-EXPRESS-002-02",
-    "test_ids": [
-      "TST-EXPRESS-002-02-01"
-    ],
+    "test_ids": ["TST-EXPRESS-002-02-01"],
     "gap_type": "weak_assertion",
     "confidence": "high",
     "note": "The test only checks that quality is defined, so the quality value is not checked."
@@ -235,9 +201,7 @@
     "mutant_id": "58",
     "requirement_id": "REQ-EXPRESS-002",
     "scenario_id": "SCN-EXPRESS-002-02",
-    "test_ids": [
-      "TST-EXPRESS-002-02-01"
-    ],
+    "test_ids": ["TST-EXPRESS-002-02-01"],
     "gap_type": "weak_assertion",
     "confidence": "high",
     "note": "The test only checks that quality is defined, so the quality value is not checked."
@@ -246,9 +210,7 @@
     "mutant_id": "59",
     "requirement_id": "REQ-EXPRESS-002",
     "scenario_id": "SCN-EXPRESS-002-02",
-    "test_ids": [
-      "TST-EXPRESS-002-02-01"
-    ],
+    "test_ids": ["TST-EXPRESS-002-02-01"],
     "gap_type": "weak_assertion",
     "confidence": "high",
     "note": "The test only checks that quality is defined, so the quality value is not checked."
@@ -257,9 +219,7 @@
     "mutant_id": "60",
     "requirement_id": "REQ-EXPRESS-002",
     "scenario_id": "SCN-EXPRESS-002-02",
-    "test_ids": [
-      "TST-EXPRESS-002-02-01"
-    ],
+    "test_ids": ["TST-EXPRESS-002-02-01"],
     "gap_type": "weak_assertion",
     "confidence": "high",
     "note": "The test only checks that quality is defined, so the quality value is not checked."
@@ -337,9 +297,7 @@
     "mutant_id": "78",
     "requirement_id": "REQ-EXPRESS-003",
     "scenario_id": "SCN-EXPRESS-003-02",
-    "test_ids": [
-      "TST-EXPRESS-003-02-01"
-    ],
+    "test_ids": ["TST-EXPRESS-003-02-01"],
     "gap_type": "weak_assertion",
     "confidence": "high",
     "note": "The test checks the error type but not the message."
@@ -520,10 +478,7 @@
     "mutant_id": "116",
     "requirement_id": "REQ-EXPRESS-004",
     "scenario_id": "SCN-EXPRESS-004-02",
-    "test_ids": [
-      "TST-EXPRESS-004-02-01",
-      "TST-EXPRESS-004-02-02"
-    ],
+    "test_ids": ["TST-EXPRESS-004-02-01", "TST-EXPRESS-004-02-02"],
     "gap_type": "missing_boundary",
     "confidence": "high",
     "note": "No test checks hop 2, which is the exact limit for a trust count of 2."
@@ -532,9 +487,7 @@
     "mutant_id": "118",
     "requirement_id": "REQ-EXPRESS-004",
     "scenario_id": "SCN-EXPRESS-004-03",
-    "test_ids": [
-      "TST-EXPRESS-004-03-01"
-    ],
+    "test_ids": ["TST-EXPRESS-004-03-01"],
     "gap_type": "untested_branch",
     "confidence": "medium",
     "note": "No test passes a non-string value such as an array or undefined to this branch."
@@ -543,9 +496,7 @@
     "mutant_id": "124",
     "requirement_id": "REQ-EXPRESS-004",
     "scenario_id": "SCN-EXPRESS-004-03",
-    "test_ids": [
-      "TST-EXPRESS-004-03-01"
-    ],
+    "test_ids": ["TST-EXPRESS-004-03-01"],
     "gap_type": "untested_branch",
     "confidence": "medium",
     "note": "No test uses a list with no space after the comma."
