@@ -34,7 +34,7 @@ Copy `.env.example` to `.env` for model settings. Never commit `.env`.
 | C4-04 | Scores: overall, per module, per requirement (`src/scores.ts`) |
 | C4-05 | Equivalent-mutant filter with rules E1 and E2 (`src/equivalent.ts`); writes `c4/equivalent_mutants.json`. Spot-check log: `docs/equivalent-spot-check.md` |
 | C4-06 | Trace of each survivor to TST, SCN and REQ (`src/trace.ts`); `c4 run` writes `c4/adequacy_report.json` (`src/report.ts`) |
-| C4-07 | Trace-signal modes with an embedding tie-break (`src/signal.ts`, `src/embedding.ts`) |
+| C4-07 | Trace-signal modes with an embedding tie-break (`src/signal.ts`, `src/embedding.ts`). Comparison on the pilot: `docs/c4-07-comparison.md` |
 | C4-08 | Blind ground truth for the Express-5 pilot survivors: `docs/annotation/express-5/ground-truth.json`. Guideline: `docs/trace-annotation-guideline.md` |
 | C4-09 | Gap classifier: each survivor gets a gap type, evidence and an explanation (`src/gap.ts`) |
 | C4-10 | Ranked recommendations, routed to C1, C2 or C3 (`src/recommend.ts`) |
@@ -166,4 +166,4 @@ C4 groups the survivors that have a gap by gap type, route and scenario. Each gr
 
 ## Next Planner tasks
 
-- C4-07 comparison table: run all 3 modes on the pilots with Ollama running
+- C4-13 Demo script, slides and backup video
