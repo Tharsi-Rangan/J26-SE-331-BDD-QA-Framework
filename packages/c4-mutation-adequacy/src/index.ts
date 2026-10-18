@@ -3,7 +3,8 @@ import path from 'node:path';
 import type { RunOptions } from './args.js';
 import { embedderFromEnv } from './embedding.js';
 import { findEquivalentMutants } from './equivalent.js';
-import { loadInputs, loadScenarioMetadata } from './loader.js';
+import { classifyGaps } from './gap.js';
+import { loadInputs, loadMockDecisions, loadScenarioMetadata } from './loader.js';
 import { buildReport, writeReport, type AdequacyReport } from './report.js';
 import { aggregateScores, type Scores } from './scores.js';
 import { applyTraceSignal, traceTexts } from './signal.js';
@@ -12,7 +13,9 @@ import { buildSurvivors, testsByStrykerId, unmatchedTestNames, type Survivor } f
 
 export type { RunOptions } from './args.js';
 export { findEquivalentMutants } from './equivalent.js';
-export { loadInputs, loadScenarioMetadata } from './loader.js';
+export { classifyGap, classifyGaps } from './gap.js';
+export { buildRecommendations, routeFor } from './recommend.js';
+export { loadInputs, loadMockDecisions, loadScenarioMetadata } from './loader.js';
 export { buildReport, writeReport } from './report.js';
 export { aggregateScores } from './scores.js';
 export { applyTraceSignal, traceTexts } from './signal.js';
@@ -22,7 +25,7 @@ export { buildSurvivors, testsByStrykerId, traceMutant } from './trace.js';
 /**
  * Requirement-Traceable Mutation Adequacy Attribution.
  * Done so far: loader (C4-03), StrykerJS run (C4-02), scores (C4-04), equivalent filter (C4-05)
- * traces (C4-06) and trace-signal modes (C4-07).
+ * traces (C4-06), trace-signal modes (C4-07), gap classifier (C4-09) and recommendations (C4-10).
  */
 export async function run(options: RunOptions): Promise<AdequacyReport> {
   if (!options.in) throw new Error('Missing --in <run folder>');
@@ -57,7 +60,7 @@ export async function run(options: RunOptions): Promise<AdequacyReport> {
     testsByStrykerId(mutation, tests),
     equivalentIds,
   );
-  const survivors =
+  const tracedSurvivors =
     embedding && texts
       ? await applyTraceSignal(
           coverageSurvivors,
@@ -68,6 +71,15 @@ export async function run(options: RunOptions): Promise<AdequacyReport> {
         )
       : coverageSurvivors;
   console.log(`[c4] trace signal ${options.traceSignal}`);
+  const survivors = classifyGaps(tracedSurvivors, {
+    report: mutation,
+    tests,
+    testSource: (file) => {
+      const f = path.join(inputs.inDir, file);
+      return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : undefined;
+    },
+    mockDecisions: loadMockDecisions(inputs.inDir),
+  });
   printScores(scores);
   printSurvivors(survivors);
 
@@ -75,6 +87,10 @@ export async function run(options: RunOptions): Promise<AdequacyReport> {
     mode: options.traceSignal,
     embeddingModel: embedding?.model,
   });
+  for (const r of report.recommendations)
+    console.log(
+      `[c4]   ${r.rec_id} -> ${r.route_to} ${r.gap_type} (+${r.predicted_impact}): ${r.action}`,
+    );
   console.log(`[c4] wrote ${writeReport(report, options.out)}`);
   return report;
 }
@@ -101,5 +117,6 @@ function printSurvivors(survivors: Survivor[]): void {
     console.log(
       `[c4]   mutant ${s.mutant_id} ${s.status} ${s.mutator} at ${s.file}:${s.location.start.line}: ${chain}`,
     );
+    if (s.gap) console.log(`[c4]     gap ${s.gap.type}: ${s.gap.explanation}`);
   }
 }

@@ -1,7 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { assertMatchesSchema } from './contracts.js';
-import type { ScenarioMetadata, Subject, SubjectManifest, TestManifest } from './types.js';
+import type {
+  MockDecisions,
+  ScenarioMetadata,
+  Subject,
+  SubjectManifest,
+  TestManifest,
+} from './types.js';
 
 /** Everything C4 needs from the run folder, checked against the contracts. */
 export interface C4Inputs {
@@ -68,4 +74,13 @@ export function loadScenarioMetadata(inDir: string): ScenarioMetadata {
   const meta = readJson<ScenarioMetadata>(path.join(inDir, 'c2', 'scenario_metadata.json'));
   assertMatchesSchema(meta, 'c2-scenario-metadata.schema.json', 'c2/scenario_metadata.json');
   return meta;
+}
+
+/** Load `c3/mock_decisions.json`, or return undefined when the run has none. */
+export function loadMockDecisions(inDir: string): MockDecisions | undefined {
+  const file = path.join(inDir, 'c3', 'mock_decisions.json');
+  if (!fs.existsSync(file)) return undefined;
+  const mocks = readJson<MockDecisions>(file);
+  assertMatchesSchema(mocks, 'c3-mock-decisions.schema.json', 'c3/mock_decisions.json');
+  return mocks;
 }
