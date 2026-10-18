@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from typing import Any
+import hashlib
+import json
 
 from c1_requirement_quality.rag.fact_extractor import Fact, extract_facts
 from c1_requirement_quality.rag.retriever import DenseRetriever
@@ -26,6 +28,39 @@ class RAGGroundingAnalyser:
         self.top_k = top_k
         self.use_spacy = use_spacy
         self._embedding_load_error: RAGModelLoadError | None = None
+
+    def model_provenance(self) -> dict[str, Any]:
+        """Validate configured local assets and record hashes without downloading.
+
+        Hashes establish local identity/change detection, not independent remote
+        authentication or model accuracy. Both models must be available even if
+        a particular fact can be settled symbolically without invoking NLI.
+        """
+        from c1_requirement_quality.ml.similarity_diagnostics import checkpoint_provenance
+        from c1_requirement_quality.model_paths import get_minilm_cache_dir, get_deberta_nli_cache_dir, DEBERTA_NLI_MODEL_NAME
+        mini = checkpoint_provenance(get_minilm_cache_dir())
+        directory = get_deberta_nli_cache_dir()
+        if directory is None:
+            raise FileNotFoundError("DeBERTa local NLI snapshot unavailable; no download attempted")
+        required = ["config.json", "tokenizer.json", "tokenizer_config.json", "model.safetensors"]
+        for name in required:
+            if not (directory / name).is_file():
+                raise FileNotFoundError(f"DeBERTa checkpoint incomplete: missing {name} in {directory}")
+        config = json.loads((directory / "config.json").read_text(encoding="utf-8"))
+        if (config.get("model_type") != "deberta-v2"
+                or config.get("architectures") != ["DebertaV2ForSequenceClassification"]
+                or config.get("id2label") != {"0": "contradiction", "1": "entailment", "2": "neutral"}):
+            raise ValueError("Unsupported DeBERTa NLI architecture or label mapping")
+        assets = {}
+        for name in required + [n for n in ("spm.model", "special_tokens_map.json", "added_tokens.json") if (directory / n).is_file()]:
+            with (directory / name).open("rb") as stream:
+                assets[name] = hashlib.file_digest(stream, "sha256").hexdigest()
+        return {"embedding": mini, "nli": {"identifier": DEBERTA_NLI_MODEL_NAME,
+            "local_directory": str(directory.resolve()), "asset_sha256": assets,
+            "local_files_only": True, "label_mapping": config["id2label"],
+            "identity_note": "Local asset hashes recorded; not independently authenticated remotely"},
+            "fact_extraction": {"use_spacy": self.use_spacy,
+                "policy": "existing rule-based fact extraction; no language-model download"}}
 
     @property
     def loaded_model_names(self) -> tuple[str, ...]:
@@ -90,7 +125,13 @@ class RAGGroundingAnalyser:
                 "component": result.component or result.method,
                 "model": result.model_name,
                 "diagnostic": result.diagnostic,
-                "retrieved_evidence": [candidate.to_dict() for candidate in candidates],
+                "evidence_outcomes": [
+                    {"chunk_id": chunk_id, "outcome": outcome}
+                    for chunk_id, outcome in result.evidence_outcomes
+                ],
+                "retrieved_evidence": [{**candidate.to_dict(),
+                    "start_line": candidate.start_line, "end_line": candidate.end_line}
+                    for candidate in candidates],
             })
             for candidate in candidates:
                 if candidate.chunk_id in matched and candidate.chunk_id not in evidence_ids:

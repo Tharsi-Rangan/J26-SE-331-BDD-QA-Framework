@@ -64,9 +64,13 @@ class DemoSession:
     @classmethod
     def create(cls, workspace: Path, *, artifact: Path | None = None, source: Path | None = None,
                run_id: str | None = None, registry: Path | None = None,
-               project_code: str = "EX", document_id: str | None = None, progress=None, stage_progress=None) -> DemoSession:
+               project_code: str = "EX", document_id: str | None = None, progress=None, stage_progress=None,
+               mandatory_ml: bool = False, classifier: Any | None = None,
+               mandatory_rag: bool = False) -> DemoSession:
         from c1_requirement_quality import cli
         workspace = workspace.resolve()
+        if (mandatory_ml or mandatory_rag) and artifact is not None:
+            raise ValueError("Mandatory initial ML analysis requires a new source analysis")
         if workspace.exists():
             raise FileExistsError("New demo workspace must not exist; use --resume for an existing session")
         if artifact is not None:
@@ -94,11 +98,40 @@ class DemoSession:
         workspace.mkdir(parents=True)
         _write(workspace / "session.json", {"version": 1, "base_artifact": str(artifact),
             "base_sha256": initial_hash, "source": str(source), "source_sha256": source_hash,
-            "expected_run_id": run_id if initial_hash is None else None})
+            "expected_run_id": run_id if initial_hash is None else None,
+            "mandatory_ml": mandatory_ml, "mandatory_rag": mandatory_rag})
         if initial_hash is None:
-            cli.run(original_source, workspace / "initial", run_id, project_code,
-                    registry_path=registry, grounding_mode="lexical", document_id=document_id, progress=progress,
-                    stage_progress=stage_progress)
+            try:
+                cli.run(original_source, workspace / "initial", run_id, project_code,
+                        registry_path=registry, grounding_mode="rag" if mandatory_rag else "lexical",
+                        document_id=document_id, progress=progress, stage_progress=stage_progress,
+                        mandatory_rag=mandatory_rag)
+            except Exception as error:
+                if mandatory_rag and "Mandatory RAG grounding incomplete" in str(error):
+                    _write(workspace / "rag_failure.json", {"status": "incomplete", "error": str(error)})
+                raise
+        if mandatory_ml:
+            if stage_progress:
+                stage_progress("review", "pending", "Waiting for mandatory ML classification")
+                stage_progress("ml", "running", "Verifying and running local DistilBERT; experimental scores only")
+            try:
+                from c1_requirement_quality.ml.ml_diagnostics import defect_diagnostics_run
+                sidecar = workspace / "sidecars/initial-defect-predictions.json"
+                defect_diagnostics_run(artifact, sidecar, classifier=classifier)
+                data = json.loads(artifact.read_text(encoding="utf-8"))
+                _, digest = _load_diagnostics(sidecar, data, _hash(artifact.read_bytes()), "distilbert")
+                _write(workspace / "ml_analysis.json", {
+                    "status": "completed", "input_sha256": _hash(artifact.read_bytes()),
+                    "sidecar_sha256": digest,
+                })
+            except Exception as error:
+                detail = f"{type(error).__name__}: {error}"
+                _write(workspace / "ml_failure.json", {"status": "incomplete", "error": detail})
+                if stage_progress: stage_progress("ml", "failed", detail)
+                raise ValueError(f"Mandatory ML classification incomplete: {detail}") from error
+            if stage_progress:
+                stage_progress("ml", "completed", "Five-label scores saved; no threshold or decision effect")
+                stage_progress("review", "running", "Verifying session and saved predictions")
         return cls(workspace)
 
     def __init__(self, workspace: Path):
@@ -109,6 +142,9 @@ class DemoSession:
         self.source = Path(self.meta["source"])
         self.current = Path(self.meta["base_artifact"])
         if not self.current.is_file():
+            failure = self.workspace / "rag_failure.json"
+            if self.meta.get("mandatory_rag") and failure.is_file():
+                raise ValueError(json.loads(failure.read_text(encoding="utf-8"))["error"] + "; no inference replayed")
             raise ValueError("Initial analysis was not published; no operation was replayed. Preserve this workspace and start a fresh one.")
         if self.meta["base_sha256"] and _hash(self.current.read_bytes()) != self.meta["base_sha256"]:
             raise ValueError("Session base artifact changed")
@@ -149,6 +185,24 @@ class DemoSession:
             self.events.append(event)
         self.read()
 
+    def initial_ml_predictions(self):
+        """Validate saved initial-text scores; never replay inference on resume."""
+        base = Path(self.meta["base_artifact"])
+        if not (self.workspace / "ml_analysis.json").is_file():
+            failure_path = self.workspace / "ml_failure.json"
+            detail = (json.loads(failure_path.read_text(encoding="utf-8")).get("error")
+                      if failure_path.is_file() else "No completion receipt was published")
+            raise ValueError(f"Mandatory ML classification incomplete: {detail}")
+        receipt = json.loads((self.workspace / "ml_analysis.json").read_text(encoding="utf-8"))
+        raw = base.read_bytes()
+        if receipt.get("status") != "completed" or receipt.get("input_sha256") != _hash(raw):
+            raise ValueError("Mandatory ML classification incomplete or input binding changed")
+        data, digest = _load_diagnostics(self.workspace / "sidecars/initial-defect-predictions.json",
+            json.loads(raw.decode("utf-8")), _hash(raw), "distilbert")
+        if receipt.get("sidecar_sha256") != digest or data.get("threshold") is not None:
+            raise ValueError("Mandatory ML predictions changed or have an unexpected threshold")
+        return data
+
     def _append(self, kind: str, **values: Any) -> None:
         event = {"sequence": len(self.events) + 1, "previous": self.events[-1]["sha256"] if self.events else None,
                  "kind": kind, **values}
@@ -163,9 +217,16 @@ class DemoSession:
         data = json.loads(self.current.read_text(encoding="utf-8-sig"))
         _validate_contract_artifact(data)
         text, manifest = verify_source(self.current, self.source)
+        if self.meta.get("mandatory_rag") and manifest.get("rag_policy") != "c1-initial-rag-v1":
+            raise ValueError("Mandatory RAG grounding receipt missing")
         state, _ = load_state(self.current, self.source)
         if self.meta.get("expected_run_id") and data["run_id"] != self.meta["expected_run_id"]:
             raise ValueError("Initial run identity mismatch")
+        if self.meta.get("mandatory_ml"):
+            try:
+                self.initial_ml_predictions()
+            except (OSError, ValueError, KeyError) as error:
+                raise ValueError(f"Mandatory ML classification incomplete or invalid; no inference replayed: {error}") from error
         return data, text, manifest, state
 
     def _check_child(self, operation):
@@ -200,7 +261,9 @@ class DemoSession:
             raise ValueError("Explicit confirmation and reviewer identity are required")
         if self.pending is not None:
             raise ValueError("Resolve pending operation before another action")
-        self.read()
+        _, _, manifest, _ = self.read()
+        from c1_requirement_quality.source_integrity import require_refinement_grounding
+        require_refinement_grounding(manifest)
         token = uuid.uuid4().hex
         actions = self.workspace / "actions" / f"{token}.json"
         actions_list = action if isinstance(action, list) else [action]

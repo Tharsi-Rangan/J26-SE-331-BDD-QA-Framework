@@ -148,6 +148,8 @@ def refine_run(input_path: Path, srs: Path, actions_path: Path, out: Path) -> No
     actions = json.loads(actions_path.read_text(encoding="utf-8-sig"))
     _validate_contract_artifact(artifact)
     srs_text, manifest = verify_source(input_path, srs)
+    from c1_requirement_quality.source_integrity import require_refinement_grounding
+    require_refinement_grounding(manifest)
     parent_state, _ = load_state(input_path, srs)
     refined, diagnostics, workflow_state = refine_with_history(
         artifact, actions, srs_text, parent_state, input_path, out / "c1", manifest,
@@ -187,6 +189,7 @@ def _run_staged(
     document_id: str | None = None,
     progress=None,
     stage_progress=None,
+    mandatory_rag: bool = False,
 ) -> None:
     """Parse an SRS, run quality and grounding analysis, and write contract-compliant artifacts.
 
@@ -202,6 +205,8 @@ def _run_staged(
         raise ValueError(f"Invalid run_id: {run_id}")
     if grounding_mode not in {"lexical", "rag"}:
         raise ValueError("grounding_mode must be 'lexical' or 'rag'")
+    if mandatory_rag and grounding_mode != "rag":
+        raise ValueError("Mandatory RAG analysis cannot use lexical grounding")
 
     # Extract normalized full text and requirements from any supported SRS format
     c1_dir = out / "c1"
@@ -258,18 +263,45 @@ def _run_staged(
         for row in requirements
     }
 
-    # Stage C: run deterministic grounding analysis against the raw SRS text.
+    # Stage C: use the selected grounding service against the archived full text.
     if progress: progress("Grounding...")
-    rag_analyser = (
-        RAGGroundingAnalyser(srs_text, verifier=FactVerifier(LocalNLI()))
-        if grounding_mode == "rag" else None
-    )
-    grounding_results: list[dict[str, object]] = [
-        (rag_analyser.analyse(str(r["original_text"])) if rag_analyser else
-         analyse_grounding(str(r["original_text"]), srs_text, source_format="docx")
-          if doc.format == "docx" else analyse_grounding(str(r["original_text"]), srs_text))
-        for r in requirements
-    ]
+    rag_analyser = None
+    rag_provenance = None
+    try:
+        rag_analyser = (
+            RAGGroundingAnalyser(srs_text, use_spacy=False) if mandatory_rag else
+            RAGGroundingAnalyser(srs_text, verifier=FactVerifier(LocalNLI()))
+            if grounding_mode == "rag" else None
+        )
+        if mandatory_rag:
+            from c1_requirement_quality.ml.ml_diagnostics import _require_memory
+            _require_memory()
+            rag_provenance = rag_analyser.model_provenance()
+        grounding_results: list[dict[str, object]] = [
+            (rag_analyser.analyse(str(r["original_text"])) if rag_analyser else
+             analyse_grounding(str(r["original_text"]), srs_text, source_format="docx")
+              if doc.format == "docx" else analyse_grounding(str(r["original_text"]), srs_text))
+            for r in requirements
+        ]
+        if rag_analyser:
+            (c1_dir / "rag_diagnostics.json").write_text(json.dumps([
+                {"requirement_id": req["requirement_id"], "text": req["original_text"],
+                 **result} for req, result in zip(requirements, grounding_results, strict=True)
+            ], indent=2, ensure_ascii=False, allow_nan=False) + "\n", encoding="utf-8")
+        if mandatory_rag:
+            errors = [message for result in grounding_results for message in result.get("errors", [])]
+            if not errors and any(d.get("outcome") == "ERROR"
+                    for result in grounding_results for d in result.get("diagnostics", [])):
+                errors.append("RAG verification returned ERROR without diagnostic details")
+            if errors:
+                raise RuntimeError("; ".join(errors))
+            if rag_analyser.model_provenance() != rag_provenance:
+                raise RuntimeError("RAG model assets changed during analysis")
+    except Exception as error:
+        if mandatory_rag:
+            if stage_progress: stage_progress("grounding", "failed", str(error))
+            raise ValueError(f"Mandatory RAG grounding incomplete: {type(error).__name__}: {error}") from error
+        raise
     if stage_progress:
         stage_progress("grounding", "completed", "Implemented checks finished; uncertainty remains reviewable")
         stage_progress("tier", "running", "")
@@ -289,13 +321,6 @@ def _run_staged(
         stage_progress("review", "running", "Validating and publishing review artifacts")
 
     if rag_analyser:
-        diagnostics_path = out / "c1" / "rag_diagnostics.json"
-        diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
-        diagnostics_path.write_text(json.dumps([
-            {"requirement_id": req["requirement_id"], "diagnostics": result.get("diagnostics", []),
-             "errors": result.get("errors", [])}
-            for req, result in zip(requirements, grounding_results, strict=True)
-        ], indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         for result in grounding_results:
             for message in result.get("errors", []):
                 print(f"[c1] RAG grounding error: {message}", file=sys.stderr)
@@ -432,13 +457,26 @@ def _run_staged(
         json.dumps(validated_requirements, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
+    if mandatory_rag:
+        from c1_requirement_quality.source_integrity import sha256
+        metadata = {"policy": "c1-initial-rag-v1", "status": "completed",
+            "input_sha256": sha256(validated_output_path.read_bytes()),
+            "source_sha256": manifest["sha256"], "normalized_sha256": manifest["normalized_sha256"],
+            "models": rag_provenance, "loaded_models": list(rag_analyser.loaded_model_names),
+            "scope": "initial original requirements only; refinement publication blocked"}
+        metadata_path = c1_dir / "internal/rag_provenance.json"
+        metadata_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        manifest.update(rag_policy="c1-initial-rag-v1",
+            rag_provenance_sha256=sha256(metadata_path.read_bytes()),
+            rag_diagnostics_sha256=sha256((c1_dir / "rag_diagnostics.json").read_bytes()))
     write_state(c1_dir, initial_state(validated_requirements, manifest))
     seal_source(c1_dir, manifest)
 
 
 def run(srs: Path, out: Path, run_id: str, project_code: str = "EX",
         registry_path: Path | None = None, grounding_mode: str = "lexical",
-        document_id: str | None = None, progress=None, stage_progress=None) -> None:
+        document_id: str | None = None, progress=None, stage_progress=None,
+        mandatory_rag: bool = False) -> None:
     """Validate a staged run before publishing artifacts, then commit registry last.
 
     Failed staging directories are retained for inspection. No existing run is
@@ -456,7 +494,7 @@ def run(srs: Path, out: Path, run_id: str, project_code: str = "EX",
     out.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".c1-run-pending-", dir=out.parent))
     try:
-        _run_staged(srs, staging, run_id, project_code, registry, grounding_mode, document_id, progress, stage_progress)
+        _run_staged(srs, staging, run_id, project_code, registry, grounding_mode, document_id, progress, stage_progress, mandatory_rag)
         staged = staging / "c1"
         _validate_contract_artifact(json.loads((staged / "validated_requirements.json").read_text(encoding="utf-8")))
         verify_source(staged / "validated_requirements.json", srs)

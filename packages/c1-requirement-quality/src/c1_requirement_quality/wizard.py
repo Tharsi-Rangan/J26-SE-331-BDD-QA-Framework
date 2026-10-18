@@ -39,8 +39,8 @@ HELP = ("Enter the number beside an option, then press Enter. Back returns witho
         "  Tier 3: Severe issue, conflict or manual review required.")
 
 STAGES = {"read": "Read SRS document", "extract": "Extract and identify requirements",
-          "quality": "Rule-based quality checks", "grounding": "Grounding and consistency checks",
-          "tier": "Tier classification", "review": "Prepare human review"}
+          "quality": "Rule-based quality checks", "grounding": "RAG grounding and consistency checks",
+          "tier": "Tier classification", "ml": "Fine-tuned ML classification", "review": "Prepare human review"}
 
 
 class AnalysisProgress:
@@ -68,9 +68,9 @@ class AnalysisProgress:
                 if self.live: self.live.stop()
                 self.live = None
         if self.live is None:
-            self.tell("\nStep 2 - Analyse SRS | 0 / 6 stages completed")
+            self.tell(f"\nStep 2 - Analyse SRS | 0 / {len(STAGES)} stages completed")
             for key, label in STAGES.items(): self.tell("[PENDING] " + label)
-        self.tell("[SKIPPED] Optional AI diagnostics: DistilBERT, MiniLM and Groq disabled; no model execution.")
+        self.tell("[SKIPPED] Optional AI diagnostics: Groq disabled. Local RAG grounding and DistilBERT are mandatory.")
         return self
 
     def render(self):
@@ -104,7 +104,7 @@ class AnalysisProgress:
         else:
             indicator = " ..." if status == "running" else ""
             self.tell(f"[{status.upper()}] {STAGES[stage]}{indicator}" + (" - " + detail if detail else ""))
-            self.tell(f"Analysis progress [{('#' * completed).ljust(6, '-')}]: {completed} / 6 stages completed")
+            self.tell(f"Analysis progress [{('#' * completed).ljust(len(STAGES), '-')}]: {completed} / {len(STAGES)} stages completed")
 
     def __exit__(self, kind, error, traceback):
         if error is not None:
@@ -690,11 +690,23 @@ class Wizard:
         self.groq_backend = groq_backend
         self.analysis_error_details = None
 
+    def display(self, message, style=None):
+        """Style terminal output without interpreting document text as markup."""
+        if self.tell is print and sys.stdout.isatty() and os.environ.get("TERM") != "dumb":
+            try:
+                from rich.console import Console
+                from rich.text import Text
+                Console().print(Text(message, style=style or ""))
+                return
+            except (ImportError, OSError, ValueError):
+                pass
+        self.tell(message)
+
     def menu(self, title, options):
         while True:
-            self.tell("\n" + title)
+            self.display("\n" + title, "bold cyan")
             for i, option in enumerate(options, 1):
-                self.tell(f"  {i}. {option}")
+                self.display(f"  {i}. {option}")
             value = self.ask("Choose a number (or help): ").strip().lower()
             if value in {"pause", "p"}:
                 raise KeyboardInterrupt
@@ -703,7 +715,7 @@ class Wizard:
             elif value.isdigit() and 1 <= int(value) <= len(options):
                 return int(value)
             else:
-                self.tell(f"Please enter one of the displayed numbers (between 1 and {len(options)}). Type 'help' for guidance or 'pause' to pause safely.")
+                self.display(f"Please enter one of the displayed numbers (between 1 and {len(options)}). Type 'help' for guidance or 'pause' to pause safely.", "yellow")
 
     def publish(self, session, action):
         self.tell("Review this change for " + action["requirement_id"])
@@ -742,33 +754,30 @@ class Wizard:
 
     def source(self):
         while True:
-            choice = self.menu("Step 1 - Import SRS", ["Browse SRS file (optional Windows dialog)",
-                "Paste an SRS file path", "Use bundled sample SRS", "Back"])
-            if choice == 4:
+            choice = self.menu("Import SRS Document", ["Browse Files", "Paste File Path", "Back"])
+            if choice == 3:
                 return None
             try:
                 if choice == 1:
-                    self.tell("Opening Windows file picker...")
+                    self.display("Opening Windows file picker...", "cyan")
                     value = browse_file()
-                elif choice == 3:
-                    value = str(Path(__file__).with_name("sample_srs.md"))
                 else:
                     value = self.ask("SRS file path (blank cancels): ")
                 if value.strip():
                     source = validate_source(value)
                     size_bytes = source.stat().st_size
                     size_kb = size_bytes / 1024
-                    self.tell("\nSelected file: " + source.name)
-                    self.tell("File type: " + source.suffix.lower().lstrip(".").upper())
-                    self.tell(f"File size: {size_kb:.1f} KB ({size_bytes} bytes)")
-                    self.tell("Selected path: " + str(source))
-                    self.tell("Supported format: yes. Contents will be checked during extraction.")
+                    self.display("\nSelected file: " + source.name, "bold cyan")
+                    self.display("File type: " + source.suffix.lower().lstrip(".").upper())
+                    self.display(f"File size: {size_kb:.1f} KB ({size_bytes} bytes)")
+                    self.display("Source path: " + str(source))
+                    self.display("Supported format: yes. Contents will be checked during extraction.", "green")
                     if self.menu("Confirm document before analysis", ["Analyse this document", "Back to import"]) == 1:
                         return source
                     continue
-                self.tell("Selection cancelled.")
+                self.display("Selection cancelled.", "yellow")
             except Exception as error:
-                self.tell(f"Unable to open document: {error}. You can paste a path instead.")
+                self.display(f"Unable to open document: {error}. You can paste a path instead.", "red")
 
     def create(self, source):
         self.root.mkdir(parents=True, exist_ok=True)
@@ -783,23 +792,29 @@ class Wizard:
                     with redirect_stdout(output): display.update(stage, status, detail)
                 with redirect_stdout(io.StringIO()):
                     session = DemoSession.create(workspace, source=source, run_id=run_id,
-                        registry=workspace / "registry.json", stage_progress=progress)
+                        registry=workspace / "registry.json", stage_progress=progress,
+                        mandatory_ml=True, classifier=self.classifier, mandatory_rag=True)
                 # Completion requires publication and DemoSession's source/state checks.
                 display.update("review", "completed", "Verified session ready for human review")
         except Exception as error:
             self.analysis_error_details = str(error)
+            if "Mandatory ML classification incomplete" in str(error) or "Mandatory RAG grounding incomplete" in str(error):
+                raise ValueError(str(error) + ". Analysis is incomplete; retained files are not a completed analysis.") from error
             if "SRS contains no requirements" in str(error):
                 raise ValueError("The document was read, but no supported requirement statements were recognised. "
                     "Try numbered/ID-labelled statements or supported DOCX requirement heading/body blocks. "
-                    "The bundled sample is also available. Retained diagnostic files have not been deleted.") from error
+                    "Retained diagnostic files have not been deleted.") from error
             raise ValueError("Analysis could not finish. Check that the file is readable and matches its format. "
                              "Existing sessions are preserved; technical information is available in Details.") from error
+        self.display("Analysis complete. Verified session ready for human review.", "green")
+        if session.meta.get("mandatory_rag"):
+            self.display("Initial RAG analysis is available for inspection. RAG refinement integration is pending; edits and approvals cannot be published yet.", "yellow")
         return session
 
     def choose_session(self):
         paths = sorted(self.root.glob("session-*/session.json"), reverse=True)
         if not paths:
-            self.tell("No previous sessions found here. Start a new SRS analysis first.")
+            self.display("No previous sessions found here. Import an SRS document first.", "yellow")
             return None
         labels = []
         for path in paths:
@@ -830,7 +845,7 @@ class Wizard:
         try:
             return DemoSession(paths[index - 1].parent)
         except (ValueError, KeyError, OSError) as error:
-            self.tell(f"Unable to open session: {error}")
+            self.display(f"Unable to open session: {error}", "red")
             return None
 
     def requirement(self, row, session=None):
@@ -1971,30 +1986,29 @@ class Wizard:
     def run(self):
         while True:
             try:
-                choice = self.menu("C1 - Requirement Quality and Refinement\n"
-                    "Welcome! C1 helps you review software requirements, clarify missing facts,\n"
-                    "resolve conflicts, and prepare verifiable specifications for automated BDD testing.",
-                    ["Start new SRS analysis", "Resume previous session", "View previous results", "Help", "Exit"])
-                if choice == 5: return 0
-                if choice == 4: self.tell(HELP)
-                elif choice == 1:
+                choice = self.menu("Requirement Quality & Refinement Agent\n"
+                    "Automated SRS Quality Analysis",
+                    ["Import SRS Document", "Resume Previous Analysis", "Exit"])
+                if choice == 3: return 0
+                if choice == 1:
                     source = self.source()
                     if source: self.review(self.create(source), start_guided=True)
                 else:
                     session = self.choose_session()
                     if session:
-                        if choice == 2: self.review(session, start_guided=True)
-                        else:
-                            self.summary(session)
-                            self.export(session)
+                        self.review(session, start_guided=True)
             except (EOFError, KeyboardInterrupt):
-                self.tell("Paused safely. Saved work and pending records retained. Launch c1 to resume.")
+                self.display("Paused safely. Saved work and pending records retained. Launch c1 to resume.", "yellow")
                 return 0
             except (ValueError, OSError, RuntimeError, KeyError, TypeError) as error:
-                self.tell(f"Unable to continue: {error}. Existing sessions are preserved.")
+                self.display(f"Unable to continue: {error}. Existing sessions are preserved.", "red")
                 if self.analysis_error_details:
-                    while self.menu("Analysis stopped", ["Back to welcome", "Details"]) == 2:
-                        self.tell(self.analysis_error_details)
+                    try:
+                        while self.menu("Analysis stopped", ["Back to welcome", "Details"]) == 2:
+                            self.tell(self.analysis_error_details)
+                    except (EOFError, KeyboardInterrupt):
+                        self.display("Paused safely. Saved work and pending records retained. Launch c1 to resume.", "yellow")
+                        return 0
                     self.analysis_error_details = None
 
 

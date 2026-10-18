@@ -48,7 +48,7 @@ def _require_memory() -> int:
 
 
 def defect_diagnostics_run(input_path: Path, out: Path, *, model_dir: Path | None = None,
-                           threshold: float | None = None) -> None:
+                           threshold: float | None = None, classifier: Any | None = None) -> None:
     """Validate input, invoke the existing adapter, and exclusively publish a sidecar."""
     from c1_requirement_quality.contract import validate_contract_artifact as _validate_contract_artifact
     if out.exists():
@@ -62,7 +62,7 @@ def defect_diagnostics_run(input_path: Path, out: Path, *, model_dir: Path | Non
         raise ValueError("Diagnostic input requires unique IDs and nonempty original text")
     # Constructor validates cutoff without loading weights. Explicit mapping requests
     # make the existing adapter fail closed for an unknown/altered checkpoint.
-    classifier = DistilBertDefectClassifier(model_dir=model_dir or DEFAULT_MODEL_DIR,
+    classifier = classifier if classifier is not None else DistilBertDefectClassifier(model_dir=model_dir or DEFAULT_MODEL_DIR,
         threshold=threshold, semantic_labels=EXPERIMENT2_LABELS,
         mapping_provenance=EXPERIMENT2_PROVENANCE)
     available = _require_memory()
@@ -77,6 +77,7 @@ def defect_diagnostics_run(input_path: Path, out: Path, *, model_dir: Path | Non
             if (result["mapping_status"] != "VERIFIED"
                     or result["checkpoint_sha256"] != checkpoint["checkpoint_sha256"]
                     or result["requirement_id"] != row["requirement_id"] or result["text"] != row["original_text"]
+                    or result.get("threshold_applied") != threshold
                     or set(result["scores"]) != set(EXPERIMENT2_LABELS)
                     or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not 0 <= v <= 1
                            for v in result["scores"].values())):
@@ -94,7 +95,9 @@ def defect_diagnostics_run(input_path: Path, out: Path, *, model_dir: Path | Non
         "human_review_required": True, "decision_effect": "none",
         "input_sha256": hashlib.sha256(raw).hexdigest(), "run_id": artifact["run_id"],
         "model": {"identifier": classifier.model_name, "checkpoint": checkpoint,
-                  "label_order": list(EXPERIMENT2_LABELS), "training_max_tokens": 128},
+                  "label_order": list(EXPERIMENT2_LABELS), "training_max_tokens": 128,
+                  "local_files_only": True},
+        "analysis_scope": "original_text",
         "threshold": threshold, "threshold_policy": "experimental score >= cutoff; no predictions when unset",
         "score_interpretation": "Independent sigmoid scores; not calibrated confidence or validated accuracy",
         "available_ram_before_bytes": available, "inference_batch_size": 1,

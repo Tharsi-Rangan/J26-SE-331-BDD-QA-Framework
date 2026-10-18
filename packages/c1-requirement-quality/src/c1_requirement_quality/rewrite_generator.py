@@ -749,6 +749,8 @@ def generate_candidates_run(
     from c1_requirement_quality.source_integrity import verify_source
 
     srs_text, _source_manifest = verify_source(input_path, srs_path)
+    from c1_requirement_quality.source_integrity import require_refinement_grounding
+    require_refinement_grounding(_source_manifest)
     from c1_requirement_quality.workflow_persistence import load_state, current_answer_actions
     from c1_requirement_quality.effective_consistency import context_from_state
     workflow_state, _ = load_state(input_path, srs_path)

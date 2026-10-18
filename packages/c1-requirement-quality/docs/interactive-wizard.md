@@ -1,5 +1,71 @@
 # Stage 4E: beginner terminal wizard
 
+## Phase 2, Step 3: mandatory initial RAG grounding
+
+New numbered-wizard imports now select the existing RAG grounding service before
+tier classification. One document index is reused for all requirements. Existing
+rule-based fact extraction is explicitly selected (`use_spacy=False`); MiniLM
+retrieves traceable source chunks, symbolic checks run first per passage, and
+local DeBERTa verifies passages on which symbolic checks abstain. Similarity is
+only retrieval relevance. Neutral/inconclusive claims remain unresolved; any
+contradicted fact prevents fully supported grounding. Retrieval covers its top-k
+passages, not a proof that every relevant passage in the source was examined.
+
+Both local model directories must pass structural/label/file checks. Asset hashes
+are captured before and after analysis. These hashes establish local identity and
+change detection, not independent remote authentication or model accuracy.
+The existing 3 GiB memory preflight is retained. There are no downloads or cloud
+requests. NLI stays lazy where symbolic verification settles every passage.
+
+`c1/rag_diagnostics.json` records requirement IDs, original text, factual claims,
+verification outcomes, per-passage outcomes, and retrieved evidence with line
+references. `c1/internal/rag_provenance.json` binds model provenance to the exact
+contract artifact, archived source and normalized ingestion hashes. The existing
+source manifest seals both files. Resume verifies these bytes without redoing
+retrieval or inference. Errors mark the stage incomplete, retain staging files
+and `rag_failure.json`, and prevent initial run/registry publication. A neutral
+result is an executed check with an unresolved claim, not a model failure or
+successful grounding. Existing source, approval and C2 schema policies remain.
+
+This is the initial-analysis-only integration step. New RAG runs are available
+for inspection and export, with pending approvals and no BDD-ready rows.
+Refinement publication and candidate sidecar generation are deliberately refused
+for the sealed `c1-initial-rag-v1` policy until the same RAG and human-evidence
+validation are integrated into refinement. A CLI refinement cannot silently
+replace authoritative RAG with lexical checks. Old sessions and advanced lexical
+runs retain their existing behavior; existing data is never backfilled.
+
+## Phase 2, Step 2: mandatory initial local classification
+
+New imports in the normal numbered wizard automatically run the verified local
+DistilBERT classifier. The existing initial artifact is published first so the
+prediction service can bind its output to the exact artifact hash. Classification
+then runs before the session is opened for human review. Progress now has seven
+stages. Initial tier calculation remains deterministic and precedes this ML
+stage; ML scores do not change tiers, findings, approvals or readiness.
+
+Scores for all five defect labels, requirement IDs/text, checkpoint provenance
+and the input hash are saved in `sidecars/initial-defect-predictions.json` inside
+the new session. No cutoff is chosen: `predicted_defects` remains empty rather
+than inventing validated binary predictions. There is no learned readiness head.
+`ml_analysis.json` binds completed results to their bytes. Resume verifies these
+files without loading a model or replaying inference. These are original-text
+predictions, not predictions for later human-edited final text.
+
+Missing dependencies, unavailable/unverified assets, low memory or inference
+errors leave the stage incomplete and retain an exact error in `ml_failure.json`
+when ordinary exception handling can publish it. An interrupted stage without a
+completion receipt is also incomplete. Start a fresh analysis after correcting
+the cause; no automatic retry or recovery is claimed. Baseline artifacts may
+already exist, with pending decisions and no ready requirements, but do not
+represent completion of the mandatory analysis.
+
+Only local assets are loaded, with existing checkpoint verification and memory
+guards. Old sessions and advanced batch/diagnostic commands retain their existing
+behavior; old sessions are not backfilled with predictions. Step 3 above now
+adds mandatory initial RAG; cloud orchestration is unchanged. Older Stage 4E
+notes below describe historical behavior where AI stages were skipped on import.
+
 ## Stage 4E.4: DOCX compatibility and analysis progress
 
 The existing native file picker is retained. Import now displays the file name,

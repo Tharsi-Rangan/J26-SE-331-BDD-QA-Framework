@@ -28,6 +28,7 @@ class VerificationResult:
     diagnostic: str | None = None
     component: str | None = None
     model_name: str | None = None
+    evidence_outcomes: tuple[tuple[str, str], ...] = ()
 
 
 class LocalNLI:
@@ -189,44 +190,52 @@ class FactVerifier:
         self.nli = nli
 
     def verify(self, fact: Fact, evidence: list[Any]) -> VerificationResult:
+        """Aggregate all retrieved passages without hiding conflicting evidence.
+
+        Evidence IDs attribute support/contradiction only; per-passage outcomes
+        also retain neutral/error results. Errors block success even when other
+        passages support the claim. This covers retrieved evidence, not the
+        completeness of retrieval across the source document.
+        """
         if not evidence:
             return VerificationResult(VerificationOutcome.INCONCLUSIVE, diagnostic="No evidence retrieved")
-        seen: list[str] = []
-        inconclusive: list[Any] = []
+        results: list[tuple[str, VerificationResult]] = []
         for item in evidence:
             evidence_id = str(item.chunk_id)
             symbolic = verify_symbolically(fact, item.text, evidence_id)
-            if symbolic.outcome is VerificationOutcome.SUPPORTED:
-                return symbolic
-            if symbolic.outcome is VerificationOutcome.CONTRADICTED:
-                return symbolic
-            seen.append(evidence_id)
-            inconclusive.append(item)
-        if self.nli is None:
-            return VerificationResult(VerificationOutcome.INCONCLUSIVE, tuple(seen), diagnostic="No NLI classifier configured")
-        try:
-            outcomes: list[str] = [self.nli.classify(item.text, fact.text).lower() for item in inconclusive]
-        except (ImportError, OSError, RuntimeError, ValueError, KeyError) as err:
-            model_name = getattr(self.nli, "model_name", None)
-            component = "nli"
-            if isinstance(err, RAGModelLoadError):
-                component = err.component
-                model_name = err.model_name
-            return VerificationResult(
-                VerificationOutcome.ERROR, tuple(seen), "nli", str(err),
-                component, model_name,
-            )
-        if any(label in {"entailment", "entails", "supported"} for label in outcomes):
-            return VerificationResult(
-                VerificationOutcome.SUPPORTED, tuple(seen), "nli",
-                model_name=getattr(self.nli, "loaded_model_name", None),
-            )
-        if any(label in {"contradiction", "contradicts"} for label in outcomes):
-            return VerificationResult(
-                VerificationOutcome.CONTRADICTED, tuple(seen), "nli",
-                model_name=getattr(self.nli, "loaded_model_name", None),
-            )
+            result = symbolic
+            if symbolic.outcome is VerificationOutcome.INCONCLUSIVE and self.nli is not None:
+                try:
+                    label = self.nli.classify(item.text, fact.text).lower()
+                    outcome = (
+                        VerificationOutcome.SUPPORTED if label in {"entailment", "entails", "supported"}
+                        else VerificationOutcome.CONTRADICTED if label in {"contradiction", "contradicts"}
+                        else VerificationOutcome.INCONCLUSIVE
+                    )
+                    result = VerificationResult(outcome, (evidence_id,), "nli",
+                        model_name=getattr(self.nli, "loaded_model_name", None))
+                except (ImportError, OSError, RuntimeError, ValueError, KeyError) as err:
+                    result = VerificationResult(VerificationOutcome.ERROR, (evidence_id,), "nli", str(err),
+                        getattr(err, "component", "nli"),
+                        getattr(err, "model_name", getattr(self.nli, "model_name", None)))
+            results.append((evidence_id, result))
+
+        # Inspect every retrieved passage. Errors prevent success; contradiction
+        # takes precedence over support, regardless of retrieval order.
+        states = {result.outcome for _, result in results}
+        outcome = next(state for state in (
+            VerificationOutcome.ERROR, VerificationOutcome.CONTRADICTED,
+            VerificationOutcome.SUPPORTED, VerificationOutcome.INCONCLUSIVE,
+        ) if state in states)
+        decisive = [result for _, result in results if result.outcome is outcome]
+        attributed = tuple(dict.fromkeys(eid for eid, result in results
+            if result.outcome in {VerificationOutcome.SUPPORTED, VerificationOutcome.CONTRADICTED}))
+        methods = {result.method for result in decisive}
+        diagnostics = [result.diagnostic for _, result in results if result.diagnostic]
+        if outcome is VerificationOutcome.INCONCLUSIVE and self.nli is None:
+            diagnostics.append("No NLI classifier configured")
         return VerificationResult(
-            VerificationOutcome.INCONCLUSIVE, tuple(seen), "nli",
-            model_name=getattr(self.nli, "loaded_model_name", None),
+            outcome, attributed, next(iter(methods)) if len(methods) == 1 else "mixed",
+            "; ".join(diagnostics) or None, decisive[0].component, decisive[0].model_name,
+            tuple((eid, result.outcome.value) for eid, result in results),
         )

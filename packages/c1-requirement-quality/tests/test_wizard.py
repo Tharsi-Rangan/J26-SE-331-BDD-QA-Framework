@@ -18,6 +18,14 @@ def scripted(values):
 
 @pytest.fixture(autouse=True)
 def offline(monkeypatch):
+    # Historical refinement journeys retain their lexical fixture policy.
+    # Default mandatory-RAG imports are exercised in test_initial_rag.py;
+    # their publication is deliberately blocked until RAG refinement exists.
+    create = DemoSession.create.__func__
+    def legacy_create(cls, *args, **kwargs):
+        kwargs["mandatory_rag"] = False
+        return create(cls, *args, **kwargs)
+    monkeypatch.setattr(DemoSession, "create", classmethod(legacy_create))
     monkeypatch.setattr(socket.socket, "connect", lambda *a, **k: pytest.fail("Network forbidden"))
     monkeypatch.setattr(cli, "LocalNLI", lambda *a, **k: pytest.fail("No local NLI execution"))
     from c1_requirement_quality.ml_defect_classifier import DistilBertDefectClassifier
@@ -26,6 +34,30 @@ def offline(monkeypatch):
     monkeypatch.setattr(DistilBertDefectClassifier, "_ensure_loaded", lambda *a: pytest.fail("No DistilBERT load"))
     monkeypatch.setattr(SentenceTransformersEmbedder, "_load_model", lambda *a: pytest.fail("No MiniLM load"))
     monkeypatch.setattr(GroqGeneratorBackend, "_complete", lambda *a: pytest.fail("No Groq requests"))
+    # Initial ML is mandatory; test the real sidecar/persistence service with an
+    # injected adapter, without loading real assets or running inference.
+    from c1_requirement_quality.ml import ml_diagnostics
+    from c1_requirement_quality.ml.ml_defect_classifier import EXPERIMENT2_LABELS, EXPERIMENT2_FILES
+    from types import SimpleNamespace
+    class FakeInitialClassifier:
+        model_name = "distilbert-requirement-defects"
+
+        def __init__(self, **kwargs):
+            pass
+
+        def validate_checkpoint(self):
+            return {"mapping_status": "VERIFIED",
+                "checkpoint_sha256": EXPERIMENT2_FILES["model.safetensors"],
+                "mapping_provenance": "Mocked test checkpoint; no real inference"}
+
+        def classify(self, text, *, requirement_id):
+            return SimpleNamespace(to_dict=lambda: {
+                "requirement_id": requirement_id, "text": text,
+                **self.validate_checkpoint(), "scores": {label: 0.2 for label in EXPERIMENT2_LABELS},
+                "threshold_applied": None, "predicted_defects": [],
+                "model_name": self.model_name, "token_limit": 128, "truncated": False})
+    monkeypatch.setattr(ml_diagnostics, "DistilBertDefectClassifier", FakeInitialClassifier)
+    monkeypatch.setattr(ml_diagnostics, "available_memory_bytes", lambda: 4 * 1024 ** 3)
 
 
 @pytest.fixture
@@ -50,7 +82,7 @@ def test_first_time_launch_dispatch(args):
 
 def test_navigation_help_invalid_and_no_sessions(app):
     ui, messages = app
-    ui.ask = scripted(["oops", "help", "2", "3", "4", "5"])
+    ui.ask = scripted(["oops", "help", "2", "3"])
     assert ui.run() == 0
     assert any("No previous sessions" in m for m in messages)
     assert any("displayed numbers" in m for m in messages)
@@ -60,10 +92,12 @@ def test_source_invalid_dialog_cancel_and_sample(app, tmp_path):
     ui, messages = app
     bad = tmp_path / "bad.exe"
     bad.write_text("The system shall run.")
-    ui.ask = scripted(["1", "2", str(tmp_path / "absent.md"), "2", str(bad), "2", "", "3", "1"])
+    sample = tmp_path / "sample.md"
+    sample.write_text("# Requirements\n1. The system shall store records.\n")
+    ui.ask = scripted(["1", "2", str(tmp_path / "absent.md"), "2", str(bad), "2", "", "2", f'"{sample}"', "1"])
     with patch.object(wizard, "browse_file", side_effect=RuntimeError("Dialog unavailable")):
         source = ui.source()
-    assert source.name == "sample_srs.md"
+    assert source == sample
     assert any("File not found" in m for m in messages)
     assert any("Supported files" in m for m in messages)
     assert any("Selection cancelled" in m for m in messages)
@@ -167,7 +201,7 @@ def test_consistency_uses_effective_policy_and_requires_evidence(app, tmp_path):
 
 def test_cancellation_eof_and_noninteractive_fallback(app):
     ui, messages = app
-    ui.ask = scripted(["1", "4", "5"])
+    ui.ask = scripted(["1", "3", "3"])
     assert ui.run() == 0
     assert not ui.root.exists()
     def eof(_): raise EOFError
@@ -209,9 +243,10 @@ def test_advanced_demo_still_dispatches(tmp_path):
         assert guided.call_args.kwargs["resume"] is True
 
 
-def test_complete_sample_journey_and_view_previous_results(app):
+def test_complete_sample_journey_and_resume(app):
     ui, messages = app
-    ui.ask = scripted(["1", "3", "1", "2", "2", "2", "1", "3", "3", "1", "5"])
+    sample = str(wizard.Path(wizard.__file__).with_name("sample_srs.md"))
+    ui.ask = scripted(["1", "2", sample, "1", "2", "2", "2", "1", "3", "2", "1", "7", "3", "3"])
     assert ui.run() == 0
     assert len(list(ui.root.glob("session-*/session.json"))) == 1
     assert any("Total requirements: 3" in m for m in messages)
@@ -404,12 +439,12 @@ def test_picker_cancel_and_selected_file_confirmation(app, tmp_path):
     ui, messages = app
     source = tmp_path / "selected.md"
     source.write_text("# Requirements\n1. The system shall store records.\n")
-    ui.ask = scripted(["1", "2", str(source), "2", "4"])
+    ui.ask = scripted(["1", "2", str(source), "2", "3"])
     with patch.object(wizard, "browse_file", return_value=""):
         assert ui.source() is None
     assert not ui.root.exists()
     assert any(m.strip() == "Selected file: selected.md" for m in messages)
-    assert "Selected path: " + str(source) in messages
+    assert "Source path: " + str(source) in messages
     assert any("Supported format: yes" in m for m in messages)
     ui.ask = scripted(["2", str(source), "1"])
     assert ui.source() == source
@@ -418,10 +453,10 @@ def test_picker_cancel_and_selected_file_confirmation(app, tmp_path):
 def test_success_progress_has_real_order_counts_and_verified_completion(app, session):
     ui, messages = app
     completed = [m for m in messages if m.startswith("[COMPLETED]")]
-    assert len(completed) == 6
+    assert len(completed) == len(wizard.STAGES)
     assert [m.split(" - ")[0] for m in completed] == ["[COMPLETED] " + label for label in wizard.STAGES.values()]
     assert "1 requirements identified" in completed[1]
-    assert any("[######]: 6 / 6 stages completed" in m for m in messages)
+    assert any("[#######]: 7 / 7 stages completed" in m for m in messages)
     assert all("running" not in m.lower() for m in completed)
     assert session.read()[0]["contract"] == "c1.validated-requirements"
 
@@ -458,7 +493,7 @@ def test_failure_has_no_false_completion_ticks(app, tmp_path, failure):
     failed_stage = {"empty": "Extract and identify requirements", "quality": "Rule-based quality checks", "publication": "Prepare human review"}[failure]
     assert any(m.startswith("[FAILED] " + failed_stage) for m in messages)
     assert not any(m.startswith("[COMPLETED] " + failed_stage) for m in messages)
-    assert not any("6 / 6 stages completed" in m for m in messages)
+    assert not any("7 / 7 stages completed" in m for m in messages)
     assert ui.analysis_error_details
     assert not list(ui.root.glob("*/initial/c1/validated_requirements.json"))
     assert list(ui.root.glob("*/session.json"))  # Failed sessions retained.
@@ -468,7 +503,7 @@ def test_zero_extraction_friendly_error_and_details(app, tmp_path):
     ui, messages = app
     source = tmp_path / "empty.md"
     source.write_text("# Context\nNo numbered statements.\n")
-    ui.ask = scripted(["1", "2", str(source), "1", "2", "1", "5"])
+    ui.ask = scripted(["1", "2", str(source), "1", "2", "1", "3"])
     assert ui.run() == 0
     friendly = next(m for m in messages if m.startswith("Unable to continue"))
     assert "no supported requirement statements" in friendly and ".c1-run-pending" not in friendly
@@ -495,9 +530,13 @@ def test_progress_rich_render_and_text_fallback(monkeypatch, capsys):
 
 def test_stage4g2_welcome_and_help_text(app):
     ui, messages = app
-    ui.ask = scripted(["4", "5"])
+    ui.ask = scripted(["help", "3"])
     assert ui.run() == 0
-    assert any("Welcome! C1 helps you review software requirements" in m for m in messages)
+    assert any("Requirement Quality & Refinement Agent" in m for m in messages)
+    assert any("Automated SRS Quality Analysis" in m for m in messages)
+    assert "  1. Import SRS Document" in messages
+    assert "  2. Resume Previous Analysis" in messages
+    assert "  3. Exit" in messages
     assert any("What is an SRS?" in m for m in messages)
     assert any("What is BDD?" in m for m in messages)
     assert any("Tier 1: Minor wording or structural improvement." in m for m in messages)
@@ -517,6 +556,38 @@ def test_stage4g2_file_picker_notification_and_details(app, tmp_path):
     assert any("File size:" in m and "KB" in m for m in messages)
     assert any("Selected file: sample.md" in m for m in messages)
     assert any("File type: MD" in m for m in messages)
+
+
+def test_phase1_rich_literal_text_and_plain_fallback(tmp_path, monkeypatch, capsys):
+    from rich.console import Console
+    monkeypatch.setenv("TERM", "xterm")
+    monkeypatch.setattr(wizard.sys.stdout, "isatty", lambda: True)
+    ui = wizard.Wizard(tmp_path / "sessions")
+    message = r"Source path: D:\SRS [draft]\requirements.md"
+    with patch.object(Console, "print") as output:
+        ui.display(message, "cyan")
+        rendered = output.call_args.args[0]
+        assert rendered.plain == message
+        assert rendered.style == "cyan"
+    with patch("rich.console.Console", side_effect=ImportError("Rich unavailable")):
+        ui.display(message, "red")
+    assert message in capsys.readouterr().out
+
+
+def test_phase1_import_back_and_resume_dispatch(app, session):
+    ui, messages = app
+    before = session.current.read_bytes()
+    ui.ask = scripted(["1", "3", "2", "1", "3"])
+    with patch.object(ui, "review") as review:
+        assert ui.run() == 0
+    resumed = review.call_args.args[0]
+    assert resumed.workspace == session.workspace
+    assert review.call_args.kwargs == {"start_guided": True}
+    assert session.current.read_bytes() == before
+    assert len(list(ui.root.glob("session-*/session.json"))) == 1
+    assert "  1. Browse Files" in messages
+    assert "  2. Paste File Path" in messages
+    assert "  3. Back" in messages
 
 
 def test_stage4g2_requirements_overview_and_counters(app, session):
@@ -912,7 +983,7 @@ def test_stage4g4_error_recovery_cancellation_and_invalid_inputs(app, tmp_path):
     ui, messages = app
 
     # 1. Blank path cancels cleanly
-    ui.ask = scripted(["2", "", "4"])  # Choose Paste path, enter empty path (cancels), then Back
+    ui.ask = scripted(["2", "", "3"])  # Choose Paste path, cancel, then Back
     res = ui.source()
     assert res is None
     assert any("Selection cancelled." in m for m in messages)
@@ -1021,18 +1092,147 @@ class _MockDistilBertClassifier:
         )
 
 
-def test_stage4h2_ai_diagnostics_disabled_by_default(app, tmp_path):
-    """Verify that normal analysis and quality review do not run AI diagnostics."""
+def test_stage4h2_initial_ml_runs_without_changing_contract_findings(app, tmp_path):
+    """Mandatory initial scores remain separate from authoritative findings."""
     ui, messages = app
     source = tmp_path / "srs.md"
     source.write_text("# Requirements\n1. The system shall respond quickly.\n")
     session = ui.create(source)
-    assert any("[SKIPPED] Optional AI diagnostics: DistilBERT, MiniLM and Groq disabled; no model execution." in m for m in messages)
+    assert any("[COMPLETED] Fine-tuned ML classification" in m for m in messages)
+    assert session.initial_ml_predictions()["requirements"]
     data, _, _, _ = session.read()
     row = data["requirements"][0]
     # No advisory defect fields attached to contract artifact
     assert "advisory_scores" not in row
     assert "predicted_defects" not in row
+
+
+def test_mandatory_ml_mapping_provenance_and_resume_without_replay(app, tmp_path, monkeypatch):
+    from c1_requirement_quality.ml import ml_diagnostics
+    from c1_requirement_quality.ml.ml_defect_classifier import EXPERIMENT2_LABELS
+    ui, messages = app
+    source = tmp_path / "two.md"
+    source.write_text("# Requirements\n1. The system shall respond quickly.\n2. The system shall store logs.\n")
+    classifier = ml_diagnostics.DistilBertDefectClassifier()
+    with patch.object(classifier, "classify", wraps=classifier.classify) as classify:
+        ui.classifier = classifier
+        session = ui.create(source)
+        assert classify.call_count == 2
+    rows = session.read()[0]["requirements"]
+    predictions = session.initial_ml_predictions()
+    assert [(p["requirement_id"], p["text"]) for p in predictions["requirements"]] == [
+        (r["requirement_id"], r["original_text"]) for r in rows]
+    assert predictions["model"]["checkpoint"]["mapping_status"] == "VERIFIED"
+    assert predictions["model"]["local_files_only"] is True
+    assert predictions["threshold"] is None and predictions["decision_effect"] == "none"
+    assert all(set(p["scores"]) == set(EXPERIMENT2_LABELS) for p in predictions["requirements"])
+    assert all(p["predicted_defects"] == [] for p in predictions["requirements"])
+    assert all(r["human_decision"] == "pending" and not r["bdd_ready"] for r in rows)
+    cli._validate_contract_artifact(session.read()[0])
+    monkeypatch.setattr(ml_diagnostics, "defect_diagnostics_run",
+        lambda *a, **k: pytest.fail("Resume must not replay inference"))
+    resumed = DemoSession(session.workspace)
+    assert resumed.initial_ml_predictions() == predictions
+    # Refinement retains initial-text predictions without presenting them as
+    # predictions for edited final text or rerunning the initial classifier.
+    resumed.apply({"requirement_id": rows[0]["requirement_id"],
+                   "human_decision": "pending"}, "Reviewer", True)
+    assert DemoSession(session.workspace).initial_ml_predictions() == predictions
+
+
+@pytest.mark.parametrize("error", [ImportError("torch unavailable"),
+    FileNotFoundError("checkpoint missing"), RuntimeError("offline inference failed")])
+def test_mandatory_ml_failure_is_incomplete_and_never_replayed(app, tmp_path, monkeypatch, error):
+    import json
+    from c1_requirement_quality.ml import ml_diagnostics
+    ui, messages = app
+    source = tmp_path / "failure.md"
+    source.write_text("# Requirements\n1. The system shall store logs.\n")
+    monkeypatch.setattr(ml_diagnostics.DistilBertDefectClassifier, "classify",
+        lambda *a, **k: (_ for _ in ()).throw(error))
+    with pytest.raises(ValueError, match=str(error)):
+        ui.create(source)
+    workspace = next(ui.root.glob("session-*"))
+    failure = json.loads((workspace / "ml_failure.json").read_text())
+    assert failure["status"] == "incomplete" and type(error).__name__ in failure["error"]
+    assert not (workspace / "ml_analysis.json").exists()
+    assert any(m.startswith("[FAILED] Fine-tuned ML classification") for m in messages)
+    assert not any("7 / 7 stages completed" in m for m in messages)
+    with pytest.raises(ValueError, match="Mandatory ML classification incomplete"):
+        DemoSession(workspace)
+
+
+def test_mandatory_ml_rejects_tampered_saved_scores(app, session):
+    sidecar = session.workspace / "sidecars/initial-defect-predictions.json"
+    sidecar.write_text(sidecar.read_text().replace('0.2', '0.3'), encoding="utf-8")
+    with pytest.raises(ValueError, match="predictions changed"):
+        DemoSession(session.workspace)
+
+
+def test_mandatory_ml_unverified_checkpoint_blocks_before_inference(app, tmp_path, monkeypatch):
+    from c1_requirement_quality.ml import ml_diagnostics
+    source = tmp_path / "source.md"
+    source.write_text("# Requirements\n1. The system shall store logs.\n")
+    monkeypatch.setattr(ml_diagnostics.DistilBertDefectClassifier, "validate_checkpoint",
+        lambda self: {"mapping_status": "UNVERIFIED"})
+    monkeypatch.setattr(ml_diagnostics.DistilBertDefectClassifier, "classify",
+        lambda *a, **k: pytest.fail("Unknown checkpoint must not reach inference"))
+    with pytest.raises(ValueError, match="Verified Experiment 2 checkpoint required"):
+        app[0].create(source)
+    workspace = next(app[0].root.glob("session-*"))
+    with pytest.raises(ValueError, match="Verified Experiment 2 checkpoint required"):
+        DemoSession(workspace)
+
+
+def test_mandatory_ml_interruption_does_not_replay_on_resume(app, tmp_path, monkeypatch):
+    from c1_requirement_quality.ml import ml_diagnostics
+    source = tmp_path / "source.md"
+    source.write_text("# Requirements\n1. The system shall store logs.\n")
+    def interrupt(*args, **kwargs):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(ml_diagnostics.DistilBertDefectClassifier, "classify", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        app[0].create(source)
+    workspace = next(app[0].root.glob("session-*"))
+    monkeypatch.setattr(ml_diagnostics, "defect_diagnostics_run",
+        lambda *a, **k: pytest.fail("Interrupted inference must not replay"))
+    with pytest.raises(ValueError, match="No completion receipt was published"):
+        DemoSession(workspace)
+    assert not (workspace / "ml_analysis.json").exists()
+
+
+@pytest.mark.parametrize("stop", ["pause", "p", KeyboardInterrupt(), EOFError()])
+@pytest.mark.parametrize("show_details", [False, True])
+def test_failure_menu_pause_retains_incomplete_ml(app, tmp_path, monkeypatch, stop, show_details):
+    import json
+    from c1_requirement_quality.ml import ml_diagnostics
+    ui, messages = app
+    source = tmp_path / "source.md"
+    source.write_text("# Requirements\n1. The system shall store logs.\n")
+    def low_memory():
+        raise RuntimeError("Insufficient available RAM; at least 3 GiB required")
+    monkeypatch.setattr(ml_diagnostics, "_require_memory", low_memory)
+    monkeypatch.setattr(ml_diagnostics.DistilBertDefectClassifier, "classify",
+        lambda *a, **k: pytest.fail("Low memory must prevent inference"))
+    entries = iter(["1", "2", str(source), "1"] + (["2"] if show_details else []) + [stop])
+    def ask(prompt):
+        value = next(entries)
+        if isinstance(value, BaseException):
+            raise value
+        return value
+    ui.ask = ask
+    assert ui.run() == 0
+    workspace = next(ui.root.glob("session-*"))
+    failure = json.loads((workspace / "ml_failure.json").read_text())
+    assert failure["status"] == "incomplete" and "3 GiB" in failure["error"]
+    assert not (workspace / "sidecars/initial-defect-predictions.json").exists()
+    assert not (workspace / "ml_analysis.json").exists()
+    artifact = json.loads((workspace / "initial/c1/validated_requirements.json").read_text())
+    assert all(r["human_decision"] == "pending" and not r["bdd_ready"] for r in artifact["requirements"])
+    assert any("Paused safely" in m for m in messages)
+    assert not any("Analysis complete." in m or "7 / 7 stages completed" in m for m in messages)
+    with pytest.raises(ValueError, match="Mandatory ML classification incomplete"):
+        DemoSession(workspace)
 
 
 def test_stage4h2_explicit_user_opt_in_cancel(app, session):
@@ -1647,7 +1847,7 @@ def test_stage4h4b_evidence_verification_flow_and_premise_hypothesis_ordering(ap
 
 
 def test_stage4h4b_symbolic_vs_nli_separation(app, tmp_path):
-    """6. Symbolic verification handles exact token match without invoking NLI; NLI fallback for paraphrases."""
+    """Exact passages use symbolic checks; remaining passages still receive NLI."""
     ui, messages = app
     source = tmp_path / "srs.md"
     source.write_text(
@@ -1674,9 +1874,12 @@ def test_stage4h4b_symbolic_vs_nli_separation(app, tmp_path):
     ui.ask = scripted(["7", "1", "5"])
     ui.candidates(session, rid)
 
-    # Exact match is verified symbolically; NLI is not called
-    assert len(mock_nli.calls) == 0
-    assert any("Deterministic symbolic verification" in m for m in messages)
+    # Exact support must not short-circuit verification of the other passage.
+    assert mock_nli.calls == [{
+        "premise": "1. The system shall retain logs for [purpose].",
+        "hypothesis": exact_text,
+    }]
+    assert any("Verification Method: mixed" in m for m in messages)
     assert any("Outcome: SUPPORTED" in m for m in messages)
 
 
