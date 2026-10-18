@@ -38,6 +38,7 @@ Copy `.env.example` to `.env` for model settings. Never commit `.env`.
 | C4-08 | Blind ground truth for the Express-5 pilot survivors: `docs/annotation/express-5/ground-truth.json`. Guideline: `docs/trace-annotation-guideline.md` |
 | C4-09 | Gap classifier: each survivor gets a gap type, evidence and an explanation (`src/gap.ts`) |
 | C4-10 | Ranked recommendations, routed to C1, C2 or C3 (`src/recommend.ts`) |
+| C4-12 | Trace accuracy against the ground truth (`src/accuracy.ts`, `scripts/trace-accuracy.ts`) and one before/after run: `docs/c4-12-results.md` |
 
 On the golden example, `c4 run` gives 14 mutants, 13 killed, 1 survived (mutant 12), score 0.9286.
 Mutant 12 traces to TST-EX-001-02-01 and TST-EX-001-02-06, SCN-EX-001-02 and REQ-EX-001.
@@ -76,6 +77,23 @@ The run gives 138 mutants, 79 killed, 29 survived, 29 no coverage, score 0.5766.
 | `scenario_id` | 0.983 | 0.975 |
 | `test_ids` | 0.983 | 0.974 |
 | `gap_type` | 0.845 | 0.761 |
+
+## Trace accuracy and before/after (C4-12)
+
+```sh
+npx tsx scripts/trace-accuracy.ts <out>/c4/adequacy_report.json docs/annotation/express-5/ground-truth.json
+```
+
+| Field | `coverage_only` accuracy |
+|---|---|
+| requirement | 0.845 |
+| scenario | 0.759 |
+| tests | 0.983 |
+| gap type | 0.759 |
+
+`fixtures/pilot-express-5-rec-001` is the pilot with REC-001 applied: 1 new scenario and 1 new test.
+The mutation score goes from 0.5766 to 0.6569 (+0.0803). REC-001 predicted +0.0365.
+Details: `docs/c4-12-results.md`.
 
 ## Equivalent-mutant rules
 
@@ -143,4 +161,3 @@ C4 groups the survivors that have a gap by gap type, route and scenario. Each gr
 
 - C4-07 comparison table: run all 3 modes on the pilots with Ollama running
 - C4-11 HTML view of the adequacy report
-- C4-12 Trace accuracy against `ground-truth.json`, and one before/after run
