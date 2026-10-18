@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
-import { loadInputs } from '../src/loader.js';
+import { classifyGaps } from '../src/gap.js';
+import { loadInputs, loadMockDecisions } from '../src/loader.js';
 import { buildReport, writeReport } from '../src/report.js';
 import { aggregateScores } from '../src/scores.js';
 import { buildSurvivors, testsByStrykerId } from '../src/trace.js';
@@ -27,7 +28,12 @@ function goldenReport() {
   ) as MutationReport;
   const tests = inputs.manifest.tests;
   const scores = aggregateScores(mutation, tests, inputs.subject.requirement_ids);
-  const survivors = buildSurvivors(mutation, testsByStrykerId(mutation, tests));
+  const survivors = classifyGaps(buildSurvivors(mutation, testsByStrykerId(mutation, tests)), {
+    report: mutation,
+    tests,
+    testSource: (file) => fs.readFileSync(path.join(golden, file), 'utf8'),
+    mockDecisions: loadMockDecisions(golden),
+  });
   return buildReport(inputs, '10.0.0', scores, survivors, new Date('2026-10-14T00:00:00Z'));
 }
 
@@ -46,6 +52,7 @@ describe('c4 adequacy report', () => {
     });
     expect(r.summary).not.toHaveProperty('other');
     expect(r.survivors.map((s) => s.trace.requirement_ids)).toEqual([['REQ-EX-001']]);
+    expect(r.survivors.map((s) => s.gap?.type)).toEqual(['weak_assertion']);
   });
 
   test('written report passes validate.mjs in a copy of the golden folder', () => {

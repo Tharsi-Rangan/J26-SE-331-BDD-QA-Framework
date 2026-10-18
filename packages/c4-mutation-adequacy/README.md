@@ -35,10 +35,12 @@ Copy `.env.example` to `.env` for model settings. Never commit `.env`.
 | C4-05 | Equivalent-mutant filter with rules E1 and E2 (`src/equivalent.ts`); writes `c4/equivalent_mutants.json`. Spot-check log: `docs/equivalent-spot-check.md` |
 | C4-06 | Trace of each survivor to TST, SCN and REQ (`src/trace.ts`); `c4 run` writes `c4/adequacy_report.json` (`src/report.ts`) |
 | C4-07 | Trace-signal modes with an embedding tie-break (`src/signal.ts`, `src/embedding.ts`) |
+| C4-09 | Gap classifier: each survivor gets a gap type, evidence and an explanation (`src/gap.ts`) |
 
 On the golden example, `c4 run` gives 14 mutants, 13 killed, 1 survived (mutant 12), score 0.9286.
 Mutant 12 traces to TST-EX-001-02-01 and TST-EX-001-02-06, SCN-EX-001-02 and REQ-EX-001.
 This is the same as the golden `adequacy_report.json`, and the report passes `validate.mjs`.
+The gap of mutant 12 is `weak_assertion`, the same as the golden report.
 
 ## Equivalent-mutant rules
 
@@ -68,8 +70,23 @@ C4 checks only `Survived` and `NoCoverage` mutants. A flagged mutant gets `equiv
 - The embedding modes never drop a coverage link. They only change the order and the confidence.
 - `confidence` is the share of the top similarity in the sum of all similarities. Equal similarities give 1/n, the same as `coverage_only`.
 
+## Gap rules
+
+C4 gives each survivor one gap type. The first rule that matches wins.
+
+| Order | Gap type | A survivor gets it when | Evidence |
+|---|---|---|---|
+| 1 | none (`gap: null`) | The mutant is equivalent (C4-05). | - |
+| 2 | `missing_test` | No manifest test covers the mutant. | Mutated code |
+| 3 | `incomplete_mock` | The mutated code calls a symbol that `c3/mock_decisions.json` mocks for a scenario of the trace. | Mutated code |
+| 4 | `missing_boundary` | The mutator is `EqualityOperator`, for example `<` to `<=`. | Mutated code |
+| 5 | `untested_branch` | The mutator is `ConditionalExpression`, `LogicalOperator`, `BlockStatement` or `OptionalChaining`. | Mutated code |
+| 6 | `weak_assertion` | All other survivors that a test covers. | The `expect(...)` line of a covering test |
+
+For `weak_assertion`, C4 picks a `toThrow` check when the mutated code throws, and a value check when it returns.
+
 ## Next Planner tasks
 
 - C4-07 comparison table: run all 3 modes on the pilots with Ollama running
 - C4-08 Blind ground truth for the pilot survivor traces
-- C4-09 Gap classifier: 5 gap types with evidence
+- C4-10 Ranked recommendations, routed to C1, C2 or C3

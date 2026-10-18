@@ -35,7 +35,7 @@ export interface AdequacyReport {
   recommendations: unknown[];
 }
 
-/** Build `c4/adequacy_report.json`. Gaps and recommendations come in C4-09 and C4-10. */
+/** Build `c4/adequacy_report.json`. Recommendations come in C4-10. */
 export function buildReport(
   inputs: C4Inputs,
   strykerVersion: string,
