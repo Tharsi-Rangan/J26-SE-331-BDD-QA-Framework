@@ -27,13 +27,18 @@ export function strykerVersion(): string {
 
 /** StrykerJS config for one subject: Jest runner, per-test coverage, JSON report. */
 export function strykerConfig(inputs: C4Inputs): Record<string, unknown> {
+  // The StrykerJS sandbox does not copy the subject's node_modules link, so Jest gets its path.
+  const subjectModules = path.resolve(inputs.subjectRoot, 'node_modules');
+  const jestExtra = fs.existsSync(subjectModules)
+    ? { config: { modulePaths: [subjectModules] } }
+    : {};
   return {
     testRunner: 'jest',
     coverageAnalysis: 'perTest',
     mutate: inputs.mutate,
     reporters: ['json', 'clear-text'],
     jsonReporter: { fileName: 'reports/mutation/mutation.json' },
-    jest: { configFile: inputs.jestConfig },
+    jest: { configFile: inputs.jestConfig, ...jestExtra },
     // A path, because pnpm does not put the plugin where StrykerJS looks for '@stryker-mutator/*'.
     plugins: [import.meta.resolve('@stryker-mutator/jest-runner')],
     tempDirName: '.stryker-tmp',
