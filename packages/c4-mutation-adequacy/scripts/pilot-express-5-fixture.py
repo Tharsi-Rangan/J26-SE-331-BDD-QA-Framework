@@ -1,6 +1,8 @@
-# Write the C4 Express-5 pilot fixture. Usage: python3 scripts/pilot-express-5-fixture.py <out dir> <subject-manifest.json>
+# Write the C4 Express-5 pilot fixture. Usage: python3 scripts/pilot-express-5-fixture.py <out dir> <subject-manifest.json> [rec-001]
+# With rec-001, the fixture also has the scenario and test that REC-001 of the first run asks for (C4-12).
 import json, os, sys
 OUT = sys.argv[1]
+APPLY_REC_001 = len(sys.argv) > 3 and sys.argv[3] == 'rec-001'
 RUN = 'RUN-FIXTURE-EXPRESS-5'
 SUB = 'SUB-EXPRESS-5'
 TS = '2026-10-18T09:00:00+05:30'
@@ -34,7 +36,15 @@ REQS = [
    ]),
    ('03', 'Normalize a list of types', 'positive', [
       ('01', "types ['html', 'json']", ['equality'], ["expect(utils.normalizeTypes(['html', 'json'])).toHaveLength(2);"]),
-   ])]),
+   ])] + ([
+   ('04', 'Parse the parameters of a full type', 'positive', [
+      ('01', "type 'text/html; charset=utf-8; q=0.5'", ['equality'], [
+          "expect(utils.normalizeType('text/html; charset=utf-8; q=0.5')).toEqual({",
+          "  value: 'text/html',",
+          "  quality: 0.5,",
+          "  params: { charset: 'utf-8' },",
+          "});"]),
+   ])] if APPLY_REC_001 else [])),
  ('003', 'ETag function selection',
   "The system shall select the weak ETag function for true or 'weak', the strong ETag function for 'strong', no function for false, and shall reject any other value with a TypeError.",
   [('01', 'Select the ETag function from the setting', 'positive', 'ETAG_TABLE'),
@@ -67,6 +77,7 @@ STEPS = {
  '002-01': ['Given the type "html"', 'When the type is normalized', 'Then the value is "text/html" with no parameters'],
  '002-02': ['Given the type "text/html; q=0.5"', 'When the type is normalized', 'Then the value is "text/html" and the quality is 0.5'],
  '002-03': ['Given the types "html" and "json"', 'When the types are normalized', 'Then 2 normalized types are returned'],
+ '002-04': ['Given the type "text/html; charset=utf-8; q=0.5"', 'When the type is normalized', 'Then the value is "text/html", the quality is 0.5 and the charset parameter is "utf-8"'],
  '003-01': ['Given the ETag setting <setting>', 'When the ETag function is compiled', 'Then the function is "<kind>"'],
  '003-02': ['Given the ETag setting "bogus"', 'When the ETag function is compiled', 'Then a TypeError is thrown'],
  '004-01': ['Given the trust setting true', 'When the trust function is compiled', 'Then every proxy is trusted'],
