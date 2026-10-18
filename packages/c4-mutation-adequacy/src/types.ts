@@ -6,6 +6,9 @@ export interface ManifestTest {
   requirement_id: string;
   file: string;
   jest_full_name: string;
+  assertion_categories?: string[];
+  mock_decision_ids?: string[];
+  boundary_ref?: string;
 }
 
 export interface TestManifest {
@@ -67,4 +70,16 @@ export interface MutationReport {
 export interface ScenarioMetadata {
   features: { requirement_id: string; feature_name: string; requirement_text_used?: string }[];
   scenarios: { scenario_id: string; requirement_id: string; scenario_name: string }[];
+}
+
+/** The parts of `c3/mock_decisions.json` that the gap classifier reads. */
+export interface MockDecision {
+  decision_id: string;
+  scenario_id: string;
+  dependency: { import_specifier: string; symbol: string };
+  decision: string;
+}
+
+export interface MockDecisions {
+  decisions: MockDecision[];
 }
