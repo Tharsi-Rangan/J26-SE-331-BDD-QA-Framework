@@ -9,6 +9,14 @@ describe('c4 parseRunArgs', () => {
     expect(opts.in).toBe(path.join(base, 'runs', 'RUN-1'));
     expect(opts.out).toBe(path.join(base, 'runs', 'RUN-1'));
     expect(opts.subjectRoot).toBeUndefined();
+    expect(opts.traceSignal).toBe('coverage_only');
+  });
+
+  test('reads --trace-signal and rejects an unknown mode', () => {
+    expect(parseRunArgs(['run', '--out', 'x', '--trace-signal', 'full']).traceSignal).toBe('full');
+    expect(() => parseRunArgs(['run', '--out', 'x', '--trace-signal', 'sbert'])).toThrow(
+      /coverage_only, embedding_assisted, full/,
+    );
   });
 
   test('rejects a missing run command', () => {

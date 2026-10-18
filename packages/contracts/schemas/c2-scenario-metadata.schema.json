@@ -131,6 +131,8 @@
             "ep_coverage": { "$ref": "common.schema.json#/$defs/checkStatus" },
             "bva_coverage": { "$ref": "common.schema.json#/$defs/checkStatus" },
             "completeness": { "$ref": "common.schema.json#/$defs/checkStatus" },
+            "grounding": { "$ref": "common.schema.json#/$defs/checkStatus", "description": "Optional: scenario is supported by the source requirement." },
+            "adversarial": { "$ref": "common.schema.json#/$defs/checkStatus", "description": "Optional: adversarial counterexample search found no missing or wrong scenario logic." },
             "fully_verified": { "type": "boolean" },
             "notes": { "type": "string" }
           },
