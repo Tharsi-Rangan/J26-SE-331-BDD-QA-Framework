@@ -1,0 +1,61 @@
+C2-10 validation output excerpt
+Commands rerun for this evidence; output is excerpted to omit local absolute paths.
+
+COMMAND: corepack pnpm --filter @j26/c2-gherkin-generation typecheck
+
+> tsc --noEmit
+
+Exit code: 0
+
+COMMAND: corepack pnpm --filter @j26/c2-gherkin-generation test
+> vitest run
+ Test Files  7 passed (7)
+      Tests  72 passed (72)
+   Start at  16:58:30
+   Duration  4.30s (transform 47%, import 34%, tests 16%, worker 3%)
+Exit code: 0
+
+COMMAND: corepack pnpm --filter @j26/c2-gherkin-generation build
+
+> tsc -p tsconfig.build.json
+
+Exit code: 0
+
+COMMAND: corepack pnpm exec prettier --check packages/c2-gherkin-generation/src/index.ts packages/c2-gherkin-generation/src/verification-layers.ts packages/c2-gherkin-generation/test/pipeline.test.ts packages/c2-gherkin-generation/test/verification-layers.test.ts
+Checking formatting...
+All matched files use Prettier code style!
+Exit code: 0
+
+COMMAND: git diff --check
+Exit code: 0
+
+
+FOLLOW-UP VALIDATION after Rule-contained scenario support
+
+COMMAND: corepack pnpm --filter @j26/c2-gherkin-generation typecheck
+
+> tsc --noEmit
+
+Exit code: 0
+
+COMMAND: corepack pnpm --filter @j26/c2-gherkin-generation test
+> vitest run
+ Test Files  7 passed (7)
+      Tests  73 passed (73)
+   Start at  17:10:01
+   Duration  4.28s (transform 48%, import 32%, tests 17%, worker 4%)
+Exit code: 0
+
+COMMAND: corepack pnpm --filter @j26/c2-gherkin-generation build
+
+> tsc -p tsconfig.build.json
+
+Exit code: 0
+
+COMMAND: corepack pnpm exec prettier --check packages/c2-gherkin-generation/src/index.ts packages/c2-gherkin-generation/src/verification-layers.ts packages/c2-gherkin-generation/test/pipeline.test.ts packages/c2-gherkin-generation/test/verification-layers.test.ts
+Checking formatting...
+All matched files use Prettier code style!
+Exit code: 0
+
+COMMAND: git diff --check
+Exit code: 0
