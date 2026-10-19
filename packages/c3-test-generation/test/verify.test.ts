@@ -150,6 +150,36 @@ describe('C3-11 checks', () => {
     expect(semanticScore(sc, plan(31, 'equality'))).toBe(0); // disagrees; 31 is invented
   });
 
+  test('semantic score: invented field names (not in the steps or the act) lower it', () => {
+    const sc = readC3Inputs(GOLDEN).scenarios[0]!;
+    const plan = (args: unknown[]): ScenarioPlan => ({
+      scenario_id: sc.scenarioId,
+      requirement_id: sc.requirementId,
+      source: 'model',
+      attempts: 1,
+      problems: [],
+      function_under_test: ['registerUser'],
+      act: 'registerUser({ age: 30, email: "amal@example.com" })',
+      act_code: 'x',
+      params: {},
+      quoted_columns: [],
+      assertions: [
+        {
+          then: 'T1',
+          category: 'state_change',
+          target: 'userRepository.save',
+          change: 'called_with',
+          args,
+        },
+      ],
+      cases: [{ assertions: [0], categories: ['state_change'] }],
+      rule_categories: [{ then: 'T1', category: 'state_change' }],
+      category_agreement: 1,
+    });
+    expect(semanticScore(sc, plan([{ age: 30, email: 'amal@example.com' }]))).toBe(1);
+    expect(semanticScore(sc, plan([{ id: null, registered: true }]))).toBe(0.5); // agrees, but both fields invented
+  });
+
   test('failure classification: expect() failure, error in the subject, error in the test', () => {
     const f = 'c3/runnable_tests/REQ-EX-001.test.js';
     expect(

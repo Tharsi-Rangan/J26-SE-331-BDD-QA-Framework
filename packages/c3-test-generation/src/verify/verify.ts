@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ts } from 'ts-morph';
 import type { C3Inputs, C3ScenarioInput } from '../input/types.js';
-import type { AssertionSlot, ScenarioPlan } from '../assert/plan.js';
+import { objectKeys, type AssertionSlot, type ScenarioPlan } from '../assert/plan.js';
 import type { JestRunResult } from '../runner/jest.js';
 import type { CheckStatus, ManifestTest, WrittenFiles } from '../writer/jest-writer.js';
 import type { ScannedExport } from '../scan/types.js';
@@ -135,8 +135,22 @@ export function semanticScore(sc: C3ScenarioInput, plan: ScenarioPlan, row?: num
   const text = sc.steps
     .map((s) => s.text.replace(/<([^<>]+)>/g, (m, col: string) => values[col] ?? m))
     .join(' \n ');
+  // Literal values must appear in the steps; field names must appear in the steps or the act.
   const vals = slots.flatMap(assertionValues);
-  const ground = vals.length ? vals.filter((v) => grounded(v, text)).length / vals.length : 1;
+  const keys = slots.flatMap((a) =>
+    a.category === 'state_change'
+      ? objectKeys(a.args)
+      : a.category === 'equality'
+        ? objectKeys(a.expected)
+        : [],
+  );
+  const keyOk = (k: string) => {
+    const w = new RegExp(`(^|[^A-Za-z0-9_$])${k.replace(/[$]/g, '\\$')}([^A-Za-z0-9_$]|$)`, 'i');
+    return w.test(text) || w.test(plan.act ?? '');
+  };
+  const total = vals.length + keys.length;
+  const ok = vals.filter((v) => grounded(v, text)).length + keys.filter(keyOk).length;
+  const ground = total ? ok / total : 1;
   return Math.round((0.5 * agree + 0.5 * ground) * 1000) / 1000;
 }
 

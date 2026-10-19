@@ -21,7 +21,7 @@ import {
   replacePlaceholders,
 } from './expr.js';
 
-export const ASSERTION_PROMPT_VERSION = '0.2.0';
+export const ASSERTION_PROMPT_VERSION = '0.3.0';
 export const ASSERTION_CATEGORIES = ['equality', 'exception', 'state_change', 'range'] as const;
 export type AssertionCategory = (typeof ASSERTION_CATEGORIES)[number];
 export const STATE_CHANGES = ['called_with', 'called', 'not_called', 'called_times'] as const;
@@ -255,7 +255,8 @@ export function assertionPrompt(ctx: PlanContext): { system: string; user: strin
     '1. "expected", "args", "min" and "max" are JSON values taken from the steps. Never work them out from the code.',
     '2. If the call throws, that test cannot also check "result".',
     '3. A Then step that says the value is not X: use equality with the opposite value (e.g. "is not valid" -> expected false).',
-    '4. Never check a field that only a mock returns: the test must check the function under test, not the mock.',
+    '4. Never check a field that only a mock returns, also not inside called_with args: the test must check the function under test, not the mock.',
+    '   called_with args may only use fields the act passes in or the steps name; do not invent fields such as an id or a status.',
     '5. If a Then step only says the action succeeds or is accepted and a mocked dependency is listed, check that it was called (state_change).',
     ...(sc.isOutline
       ? ['6. Write "when" on the outcome column (for example result), not one assertion per row.']
@@ -430,6 +431,7 @@ export function checkAssertionAnswer(raw: RawAnswer, ctx: PlanContext): CheckedA
           else {
             slot.args = a.args;
             renderValue(a.args, ctx.params, unknownPh);
+            problems.push(...inventedArgFields(a.args, raw.act, ctx).map((p) => `${where}: ${p}`));
           }
         }
         if (change === 'called_times') {
@@ -457,6 +459,48 @@ export function checkAssertionAnswer(raw: RawAnswer, ctx: PlanContext): CheckedA
       problems.push(`${label} both throws and checks result (rule 2)`);
   }
   return { problems, act, actCode, quoted: [...quoted].sort(), assertions, cases };
+}
+
+/** Every object key inside a JSON value (args of called_with, expected of equality). */
+export function objectKeys(v: unknown): string[] {
+  const out: string[] = [];
+  const walk = (x: unknown) => {
+    if (Array.isArray(x)) x.forEach(walk);
+    else if (x && typeof x === 'object')
+      for (const [k, y] of Object.entries(x)) {
+        out.push(k);
+        walk(y);
+      }
+  };
+  walk(v);
+  return [...new Set(out)];
+}
+
+const word = (k: string) =>
+  new RegExp(`(^|[^A-Za-z0-9_$])${k.replace(/[$]/g, '\\$')}([^A-Za-z0-9_$]|$)`, 'i');
+
+/**
+ * Rule 4 for called_with: a field the act does not pass in is invented when it only comes from a mock's
+ * return value, or when no step names it. (The function under test decides what it passes on; the test may
+ * only expect fields that come from its input or from the requirement.)
+ */
+export function inventedArgFields(args: unknown[], act: unknown, ctx: PlanContext): string[] {
+  const actText = typeof act === 'string' ? act : '';
+  const steps = ctx.sc.steps.map((s) => s.text).join(' \n ');
+  const out: string[] = [];
+  for (const k of objectKeys(args)) {
+    if (word(k).test(actText)) continue;
+    const mock = ctx.mocks.find((m) => m.mockFields?.includes(k));
+    if (mock)
+      out.push(
+        `args field "${k}" only comes from the mock ${mock.target} (${mock.decision_id}), not from the act (rule 4)`,
+      );
+    else if (!word(k).test(steps))
+      out.push(
+        `args field "${k}" is not passed in by the act and no step names it; do not invent fields (rule 4)`,
+      );
+  }
+  return out;
 }
 
 /** Which assertions hold for each test (one per outline row, else one). */

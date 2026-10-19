@@ -235,6 +235,68 @@ describe('C3-08 answer check', () => {
     expect(checkAssertionAnswer(ok, withMockFields).problems).toEqual([]);
   });
 
+  test('rule 4 for called_with: the real Qwen answer with invented args { id: null, registered: true } is rejected', () => {
+    // From the real run on 19 Oct: the accepted rows expected save() to get fields that only the mock returns.
+    const qwen = {
+      act: 'registerUser({ age: <age>, email: "test@example.com" })',
+      assertions: [
+        {
+          then: 'T1',
+          when: { column: 'age', equals: '17' },
+          category: 'exception',
+          error: 'ValidationError',
+        },
+        ...['18', '19', '64', '65'].map((age) => ({
+          then: 'T1',
+          when: { column: 'age', equals: age },
+          category: 'state_change',
+          target: 'userRepository.save',
+          change: 'called_with',
+          args: [{ id: null, registered: true }],
+        })),
+        {
+          then: 'T1',
+          when: { column: 'age', equals: '66' },
+          category: 'exception',
+          error: 'ValidationError',
+        },
+      ],
+    };
+    const withMock: PlanContext = {
+      ...c2!,
+      mocks: c2!.mocks.map((m) => ({ ...m, mockFields: ['age', 'email', 'id', 'registered'] })),
+    };
+    const p = checkAssertionAnswer(qwen, withMock).problems.join(' | ');
+    expect(p).toMatch(/args field "id" only comes from the mock userRepository.save \(MD-002\)/);
+    expect(p).toMatch(/args field "registered" only comes from the mock/);
+    // without mock fields it is still caught: no step names id or registered ("registers" is not "registered")
+    const p2 = checkAssertionAnswer(qwen, c2!).problems.join(' | ');
+    expect(p2).toMatch(/args field "id" is not passed in by the act and no step names it/);
+    expect(p2).toMatch(/args field "registered" is not passed in by the act/);
+  });
+
+  test('called_with args that the act passes in are fine', () => {
+    const withMock: PlanContext = {
+      ...c2!,
+      mocks: c2!.mocks.map((m) => ({ ...m, mockFields: ['age', 'email', 'id'] })),
+    };
+    const good = {
+      ...A2,
+      assertions: [
+        A2.assertions[0]!,
+        {
+          then: 'T1',
+          when: { column: 'result', equals: 'accepted' },
+          category: 'state_change',
+          target: 'userRepository.save',
+          change: 'called_with',
+          args: [{ age: '<age>', email: 'test@example.com' }],
+        },
+      ],
+    };
+    expect(checkAssertionAnswer(good, withMock).problems).toEqual([]);
+  });
+
   test('planContext takes mock fields from the C3-07 work file', () => {
     const inputs = readC3Inputs(GOLDEN);
     const sc = inputs.scenarios[1]!;
