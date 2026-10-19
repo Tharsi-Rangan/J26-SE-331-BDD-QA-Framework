@@ -96,7 +96,10 @@ One model call per scenario. The model does **not** write test code: it fills sl
 C3 checks every answer: `act` parses, uses only exports / literals / placeholders and calls the function
 under test; `actual` uses `result`; `error` is an exported class or a built-in error; `target` is a mocked
 dependency of this scenario; `when` uses a real column value; every Then step and every Examples row has an
-assertion; a row that throws does not also check `result`. A bad answer gets one retry; a second bad answer
+assertion; a row that throws does not also check `result`. An assertion may not check what only a mock returns
+(rule 4): neither a `result.<field>` the act does not pass in, nor a `called_with` field that only the mock's
+value has or that no step names (found in the real Qwen run on 19 Oct: `save()` expected `{ id: null,
+registered: true }`, both taken from the mock). A bad answer gets one retry; a second bad answer
 marks the plan `failed` (C3-13 routes it to a stub). Without a model every plan is `failed`.
 
 Fixed templates (`src/assert/templates.ts`):
