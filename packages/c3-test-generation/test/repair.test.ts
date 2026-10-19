@@ -22,7 +22,16 @@ const B = {
 };
 const GOOD1 = {
   act: 'registerUser({ age: 30, email: "amal@example.com" })',
-  assertions: [{ then: 'T1', category: 'equality', actual: 'result.age', expected: 30 }],
+  assertions: [
+    {
+      then: 'T1',
+      category: 'state_change',
+      target: 'userRepository.save',
+      change: 'called_with',
+      args: [{ age: 30, email: 'amal@example.com' }],
+    },
+    { then: 'T1', category: 'equality', actual: 'result.age', expected: 30 },
+  ],
 };
 /** Passes every slot check, but result.profile is undefined, so the TypeError is raised in the test code. */
 const BROKEN1 = {
