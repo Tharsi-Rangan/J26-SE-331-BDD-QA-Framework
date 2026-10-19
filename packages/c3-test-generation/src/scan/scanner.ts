@@ -390,6 +390,7 @@ export function scanModule(
     style: e.style,
     line: e.node.getStartLineNumber(),
     dependencies: reach(e.node),
+    ...exportShape(e.node),
   }));
   for (const name of options.expectedExports ?? []) {
     if (!exportsByName.has(name))
@@ -589,6 +590,27 @@ function moduleExportName(right: Node, value: Node): string {
     return value.getName()!;
   }
   return 'default';
+}
+
+/** C3-08: kind, parameter list and async flag of an exported value. */
+function exportShape(node: Node): Pick<ScannedExport, 'valueKind' | 'params' | 'isAsync'> {
+  if (
+    Node.isFunctionDeclaration(node) ||
+    Node.isFunctionExpression(node) ||
+    Node.isArrowFunction(node) ||
+    Node.isMethodDeclaration(node)
+  ) {
+    return {
+      valueKind: 'function',
+      params: node.getParameters().map((p) => p.getText()),
+      isAsync: node.isAsync(),
+    };
+  }
+  if (Node.isClassDeclaration(node) || Node.isClassExpression(node)) {
+    const ctor = node.getConstructors()[0];
+    return { valueKind: 'class', params: ctor ? ctor.getParameters().map((p) => p.getText()) : [] };
+  }
+  return { valueKind: 'value' };
 }
 
 /** CommonJS (`exports.x =`, `module.exports = {...}`) and ES (`export ...`) exports. */

@@ -9,6 +9,7 @@ import {
   type BehaviourWorkFile,
 } from './mock/behaviour.js';
 import { buildMockDecisions, type MockDecision } from './mock/decisions.js';
+import { planAssertions, planContext } from './assert/plan.js';
 import { createModelClient, readModelConfig, type ModelClient } from './model/index.js';
 import { scanModule } from './scan/scanner.js';
 import type { ModuleScan } from './scan/types.js';
@@ -39,6 +40,30 @@ export type {
   StructuredBehaviour,
 } from './mock/behaviour.js';
 export * from './model/index.js';
+export {
+  ASSERTION_CATEGORIES,
+  ASSERTION_PROMPT_VERSION,
+  assertionPrompt,
+  buildCases,
+  checkAssertionAnswer,
+  mockLocalName,
+  mockTarget,
+  planAssertions,
+  planContext,
+  planScenario,
+  ruleCategories,
+  ruleCategory,
+} from './assert/plan.js';
+export type {
+  AssertionCategory,
+  AssertionSlot,
+  AssertionWorkFile,
+  PlanCase,
+  PlanContext,
+  ScenarioPlan,
+} from './assert/plan.js';
+export { renderCase, TEMPLATE_NOTES } from './assert/templates.js';
+export { checkExpression, paramName, renderValue, replacePlaceholders } from './assert/expr.js';
 
 /** C3's version, written as producer.tool_version in every contract file. */
 export const TOOL_VERSION: string = JSON.parse(
@@ -51,7 +76,7 @@ export const WORK_DIR = 'c3/work';
 /**
  * Runnable Test Generation with Explainable Assertions and Mocking.
  * Done so far: C3-03 input reader, C3-04 dependency scan, C3-05 rule-based mock decisions,
- * C3-06 model client, C3-07 mock behaviour from the Given/When steps.
+ * C3-06 model client, C3-07 mock behaviour from the Given/When steps, C3-08 typed assertions.
  */
 export async function run(
   options: RunOptions & { generatedAt?: string; model?: ModelClient },
@@ -116,6 +141,17 @@ export async function run(
       }
     }
     console.log(`[c3] mock decisions written to ${out}`);
+
+    // C3-08: typed assertions (one model call per scenario) -> c3/work/assertion_plan.json
+    const contexts = inputs.scenarios.map((sc) => {
+      const scan = index.get(`${sc.subject.subjectId}|${sc.subject.modulePath}`)!;
+      return planContext(sc, scan.exports, targets.get(sc.scenarioId)?.exports ?? [], file, work);
+    });
+    console.log(
+      `[c3] assertions (C3-08)${options.model ? ` with ${options.model.modelTag}` : ': no model, so no scenario can be planned'}:`,
+    );
+    const plans = await planAssertions(contexts, options.model, { log: (l) => console.log(l) });
+    writeJson(path.join(options.out, WORK_DIR, 'assertion_plan.json'), plans);
   }
 }
 

@@ -75,6 +75,48 @@ writer (C3-10), which turns it into Jest code with `behaviourToJest()`, e.g.
 `c3 run` uses the model in `.env`. With `--no-model`, or when `.env` has no `LLM_BASE_URL`, it keeps the
 rule defaults and never calls a model.
 
+### Typed assertions (C3-08)
+
+One model call per scenario. The model does **not** write test code: it fills slots in one JSON object.
+
+```json
+{ "act": "registerUser({ age: <age>, email: \"test@example.com\" })",
+  "assertions": [
+    { "then": "T1", "when": { "column": "result", "equals": "rejected" }, "category": "exception", "error": "ValidationError" },
+    { "then": "T1", "when": { "column": "result", "equals": "accepted" }, "category": "state_change",
+      "target": "userRepository.save", "change": "called_times", "times": 1 } ] }
+```
+
+- `act`: one call of the function under test with the values from the Given/When steps. Outlines keep
+  `<column>` placeholders; `"<path>"` in quotes is passed as a string, bare `<age>` as the row's typed value.
+- `assertions`: at least one per Then step (`T1`, `T2`, ...), each with a category and its slots.
+  Outlines can add `when` so an assertion holds only for rows with that cell value.
+- The model sees the function's **parameter names only, never its code**, so assertions follow the requirement.
+
+C3 checks every answer: `act` parses, uses only exports / literals / placeholders and calls the function
+under test; `actual` uses `result`; `error` is an exported class or a built-in error; `target` is a mocked
+dependency of this scenario; `when` uses a real column value; every Then step and every Examples row has an
+assertion; a row that throws does not also check `result`. A bad answer gets one retry; a second bad answer
+marks the plan `failed` (C3-13 routes it to a stub). Without a model every plan is `failed`.
+
+Fixed templates (`src/assert/templates.ts`):
+
+| Category       | Jest code                                                                                                   |
+| -------------- | ----------------------------------------------------------------------------------------------------------- |
+| `equality`     | `expect(actual).toBe(x)` (literals), `toEqual(x)` (objects, arrays, row values), `toBeFalsy()` for `false`, `toBeNull()` for `null` |
+| `exception`    | `expect(() => act).toThrow(Error)`; async: `await expect(act).rejects.toThrow(Error)`                       |
+| `state_change` | `expect(mock).toHaveBeenCalledWith(...)`, `.toHaveBeenCalled()`, `.not.toHaveBeenCalled()`, `.toHaveBeenCalledTimes(n)` |
+| `range`        | `expect(actual).toBeGreaterThanOrEqual(min)` / `toBeLessThanOrEqual(max)` (or the strict forms)              |
+
+`false` uses `toBeFalsy()` because JavaScript predicates often return `undefined` for "no", which the
+requirement also means.
+
+A rule-based category guess (keywords such as *error/rejected* -> exception, *between/at least* -> range,
+*saved/sent/called* -> state_change, else equality) is kept for every (row, Then step), and
+`category_agreement` (share where the model used the rule's category) is a confidence signal for C3-13.
+
+Output: `c3/work/assertion_plan.json` (internal), read by the Jest writer (C3-10).
+
 ### Model client (C3-06)
 
 All model calls go through one `ModelClient` (`src/model/`). Settings come only from `.env`

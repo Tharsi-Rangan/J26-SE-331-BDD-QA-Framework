@@ -39,6 +39,12 @@ export interface ScannedExport {
   line: number;
   /** Keys of ScannedDependency used directly or through local helper functions in the same file. */
   dependencies: string[];
+  /** C3-08: what the export is, so the model can write a call to it. */
+  valueKind?: 'function' | 'class' | 'value';
+  /** C3-08: parameter list as written, e.g. ['{ age, email }'] (functions; class = constructor). */
+  params?: string[];
+  /** C3-08: declared `async` (the test must await it). */
+  isAsync?: boolean;
 }
 
 export interface ModuleScan {
