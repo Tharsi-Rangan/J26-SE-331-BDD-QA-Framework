@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import tempfile
@@ -136,41 +137,132 @@ def build_parser() -> argparse.ArgumentParser:
 from c1_requirement_quality.contract import validate_contract_artifact, _validate_contract_artifact
 
 
-def refine_run(input_path: Path, srs: Path, actions_path: Path, out: Path) -> None:
-    """Evaluate alternatives and human actions without modifying the input run."""
+def refine_run(input_path: Path, srs: Path, actions_path: Path, out: Path, *,
+               evidence_registry: Path | None = None, evidence_candidate_ids: list[str] | None = None,
+               analyser_factory=None, _operation=None, _prepared=None) -> None:
+    """Evaluate alternatives; optional parent evidence remains historical only.
+
+    Evidence selection is an explicit internal API, not a new wizard route.
+    Session publication requires a separately journal-retained prepared commitment.
+    """
+    if (evidence_registry is None) != (evidence_candidate_ids is None):
+        raise ValueError("Parent evidence requires both registry and candidate selection")
+    if (_operation is None) != (_prepared is None):
+        raise ValueError("Operation publication requires a prepared receipt writer")
     for path, label in ((input_path, "validated requirements"), (srs, "SRS"), (actions_path, "actions")):
         if not path.is_file():
             raise FileNotFoundError(f"{label} file not found: {path}")
     if out.exists():
         raise FileExistsError(f"output run folder already exists: {out}")
 
-    artifact = json.loads(input_path.read_text(encoding="utf-8-sig"))
-    actions = json.loads(actions_path.read_text(encoding="utf-8-sig"))
+    from c1_requirement_quality.source_integrity import sha256, VerifiedWorkflowContext, resolve_workflow_policy
+    artifact_raw = input_path.read_bytes()
+    actions_raw = actions_path.read_bytes()
+    artifact = json.loads(artifact_raw)
+    actions = json.loads(actions_raw)
     _validate_contract_artifact(artifact)
     srs_text, manifest = verify_source(input_path, srs)
+    if sha256(artifact_raw) != manifest["artifact_sha256"]:
+        raise ValueError("Refinement parent artifact digest mismatch")
     from c1_requirement_quality.source_integrity import require_refinement_grounding
     require_refinement_grounding(manifest)
     parent_state, _ = load_state(input_path, srs)
+    registry_anchor = None
+    if _operation is not None:
+        from c1_requirement_quality.demo_workflow import DemoSession
+        from c1_requirement_quality.workflow_persistence import _candidate_snapshot_identity
+        from c1_requirement_quality.rag.candidate_validation import _canonical
+        operation = _operation
+        prefix = DemoSession(Path(operation["workspace"]), _registry_anchor={
+            "sequence": operation["sequence"], "sha256": operation["sha256"]},
+            analyser_factory=analyser_factory)
+        if (operation.get("operation_version") != 2 or prefix.pending != operation
+                or prefix.current.resolve() != input_path.resolve() or prefix.source.resolve() != srs.resolve()
+                or Path(operation["actions"]).resolve() != actions_path.resolve()
+                or Path(operation["out"]).resolve() != out.resolve()
+                or operation["parent_identity"] != _candidate_snapshot_identity(manifest, parent_state)
+                or operation["actions_sha256"] != sha256(actions_raw)
+                or operation["actions_parsed_sha256"] != sha256(_canonical(actions))
+                or operation["evidence_candidate_ids"] != (evidence_candidate_ids or [])
+                or (evidence_registry is not None and evidence_registry.resolve() != prefix.workspace)):
+            raise ValueError("Refinement operation provenance mismatch")
+        registry_anchor = operation["registry_anchor"]
+        if registry_anchor != {"sequence": operation["sequence"] - 1, "sha256": operation["previous"]}:
+            raise ValueError("Refinement registry cutoff must precede the pending operation")
     refined, diagnostics, workflow_state = refine_with_history(
         artifact, actions, srs_text, parent_state, input_path, out / "c1", manifest,
+        snapshot_id=_operation["child_snapshot_id"] if _operation is not None else None,
     )
+    if _operation is not None:
+        from c1_requirement_quality.workflow_persistence import refinement_operation_binding
+        workflow_state["operation_binding"] = refinement_operation_binding(_operation)
     _validate_contract_artifact(refined)
+    if evidence_registry is not None:
+        selected = {row["selected_candidate_id"] for row in refined["requirements"]
+                    if row.get("selected_candidate_id") is not None}
+        if not isinstance(evidence_candidate_ids, list) or not selected <= set(evidence_candidate_ids):
+            raise ValueError("Selected candidate lacks selected parent evidence")
 
     out.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".c1-refine-pending-", dir=out.parent))
     c1_dir = staging / "c1"
     c1_dir.mkdir()
-    (c1_dir / "validated_requirements.json").write_text(
-        json.dumps(refined, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
-    (c1_dir / "refinement_diagnostics.json").write_text(
-        json.dumps(diagnostics, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
+    child_raw = (json.dumps(refined, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    (c1_dir / "validated_requirements.json").write_bytes(child_raw)
+    diagnostics_raw = (json.dumps(diagnostics, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    (c1_dir / "refinement_diagnostics.json").write_bytes(diagnostics_raw)
+    if evidence_registry is not None:
+        from c1_requirement_quality.workflow_persistence import archive_parent_evidence_links
+        workflow_state["parent_evidence_links"] = archive_parent_evidence_links(
+            VerifiedWorkflowContext(input_path, srs), evidence_registry, c1_dir,
+            evidence_candidate_ids, analyser_factory=analyser_factory, registry_anchor=registry_anchor)
+    if _operation is not None and sha256(_canonical(workflow_state.get("parent_evidence_links"))) != _operation["evidence_links_sha256"]:
+        raise ValueError("Refinement operation evidence selection changed")
     copy_source_bundle(input_path, c1_dir, manifest, workflow_state)
-    _validate_contract_artifact(json.loads((c1_dir / "validated_requirements.json").read_text(encoding="utf-8")))
-    verify_source(c1_dir / "validated_requirements.json", srs)
+    expected_state = dict(workflow_state, artifact_sha256=sha256(child_raw))
+    expected_workflow = (json.dumps(expected_state, indent=2, ensure_ascii=False) + "\n").replace("\n", os.linesep).encode("utf-8")
+    expected_manifest = dict(manifest, artifact_sha256=sha256(child_raw),
+                             workflow_sha256=sha256(expected_workflow))
+    _, _, staged_manifest, staged_state = resolve_workflow_policy(
+        VerifiedWorkflowContext(c1_dir / "validated_requirements.json", srs))
+    if staged_manifest != expected_manifest or staged_state != expected_state:
+        raise ValueError("Staged child differs from the prepared refinement")
+    if evidence_registry is not None:
+        from c1_requirement_quality.workflow_persistence import verify_child_evidence_links
+        verify_child_evidence_links(c1_dir / "validated_requirements.json", srs,
+            registry_workspace=evidence_registry, analyser_factory=analyser_factory, registry_anchor=registry_anchor)
+    if (sha256((c1_dir / "validated_requirements.json").read_bytes()) != sha256(child_raw)
+            or (c1_dir / "internal/workflow_snapshot.json").read_bytes() != expected_workflow
+            or actions_path.read_bytes() != actions_raw):
+        raise ValueError("Refinement staging or actions changed before publication")
     # Parent integrity is checked again before publication; it remains immutable.
     load_state(input_path, srs)
+    if _operation is not None:
+        commitment = {"version": 1, "snapshot_id": expected_state["snapshot_id"],
+            "artifact_sha256": sha256(child_raw), "workflow_sha256": sha256(expected_workflow),
+            "manifest_sha256": sha256(_canonical(expected_manifest)),
+            "diagnostics_sha256": sha256(diagnostics_raw)}
+        prepared_event = _prepared(commitment)
+        proof = DemoSession(Path(_operation["workspace"]), _registry_anchor={
+            "sequence": prepared_event["sequence"], "sha256": prepared_event["sha256"]},
+            analyser_factory=analyser_factory)
+        if (proof.pending != _operation or proof.prepared != prepared_event
+                or proof.prepared["commitment"] != commitment):
+            raise ValueError("Prepared child commitment is not journal-bound")
+        _, _, final_manifest, final_state = resolve_workflow_policy(
+            VerifiedWorkflowContext(c1_dir / "validated_requirements.json", srs))
+        if (final_manifest != expected_manifest or final_state != expected_state
+                or sha256((c1_dir / "validated_requirements.json").read_bytes()) != commitment["artifact_sha256"]
+                or sha256((c1_dir / "internal/workflow_snapshot.json").read_bytes()) != commitment["workflow_sha256"]
+                or sha256((c1_dir / "refinement_diagnostics.json").read_bytes()) != commitment["diagnostics_sha256"]
+                or actions_path.read_bytes() != actions_raw):
+            raise ValueError("Prepared staging changed before publication")
+        if evidence_registry is not None:
+            verify_child_evidence_links(c1_dir / "validated_requirements.json", srs,
+                registry_workspace=evidence_registry, analyser_factory=analyser_factory,
+                registry_anchor=registry_anchor)
+    if out.exists():
+        raise FileExistsError(f"output run folder already exists: {out}")
     staging.rename(out)
     c1_dir = out / "c1"
     print(f"[c1] wrote refined requirements to {c1_dir / 'validated_requirements.json'}")

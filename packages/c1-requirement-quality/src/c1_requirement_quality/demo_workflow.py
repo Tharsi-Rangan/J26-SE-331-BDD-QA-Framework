@@ -22,6 +22,28 @@ def _hash(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def _verified_journal(workspace: Path, anchor=None) -> list[dict[str, Any]]:
+    """Read the hash chain once, optionally through an exact retained prefix."""
+    events = []
+    previous = None
+    for index, path in enumerate(sorted((workspace / "events").glob("*.json")), 1):
+        if anchor is not None and index > anchor["sequence"]:
+            break
+        event = json.loads(path.read_bytes())
+        if not isinstance(event, dict):
+            raise ValueError("Invalid demo journal event")
+        signature = event.get("sha256")
+        body = {key: value for key, value in event.items() if key != "sha256"}
+        if (event.get("sequence") != index or event.get("previous") != previous
+                or _hash(json.dumps(body, sort_keys=True).encode()) != signature):
+            raise ValueError("Invalid demo journal chain")
+        events.append(event)
+        previous = signature
+    if anchor is not None and (len(events) != anchor["sequence"] or previous != anchor["sha256"]):
+        raise ValueError("Registry journal prefix anchor mismatch")
+    return events
+
+
 def _write(path: Path, value: Any) -> None:
     """Atomically publish a new journal/action file, never replace existing content."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -138,8 +160,17 @@ class DemoSession:
                 stage_progress("review", "running", "Verifying session and saved predictions")
         return cls(workspace)
 
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, *, _registry_anchor=None, analyser_factory=None):
         self.workspace = workspace.resolve()
+        self._registry_anchor = _registry_anchor
+        self._analyser_factory = analyser_factory
+        if _registry_anchor is not None:
+            if (not isinstance(_registry_anchor, dict) or set(_registry_anchor) != {"sequence", "sha256"}
+                    or type(_registry_anchor["sequence"]) is not int or _registry_anchor["sequence"] < 0
+                    or (_registry_anchor["sequence"] == 0 and _registry_anchor["sha256"] is not None)
+                    or (_registry_anchor["sequence"] > 0 and
+                        (not isinstance(_registry_anchor["sha256"], str) or len(_registry_anchor["sha256"]) != 64))):
+                raise ValueError("Invalid registry journal prefix anchor")
         self.meta = json.loads((self.workspace / "session.json").read_text(encoding="utf-8"))
         if self.meta.get("version") != 1:
             raise ValueError("Unsupported demo session version")
@@ -156,27 +187,33 @@ class DemoSession:
             raise ValueError("Session SRS changed")
         self.events = []
         self.pending = None
-        previous = None
-        for index, path in enumerate(sorted((self.workspace / "events").glob("*.json")), 1):
-            event = json.loads(path.read_text(encoding="utf-8"))
-            signature = event.pop("sha256")
-            if event.get("sequence") != index or event.get("previous") != previous or _hash(json.dumps(event, sort_keys=True).encode()) != signature:
-                raise ValueError("Invalid demo journal chain")
-            event["sha256"] = signature
-            previous = signature
+        self.prepared = None
+        for event in _verified_journal(self.workspace, _registry_anchor):
             if event["kind"] == "pending":
                 if self.pending is not None or event["parent"] != str(self.current):
                     raise ValueError("Invalid pending operation ordering")
                 self.pending = event
+                self.prepared = None
+            elif event["kind"] == "prepared":
+                if (self.pending is None or self.pending.get("operation_version") != 2
+                        or self.prepared is not None or event["operation_id"] != self.pending["operation_id"]
+                        or event["pending_sha256"] != self.pending["sha256"]):
+                    raise ValueError("Invalid prepared operation binding")
+                self.prepared = event
             elif event["kind"] in {"completed", "cancelled"}:
                 if self.pending is None or event["operation_id"] != self.pending["operation_id"]:
                     raise ValueError("Orphan demo operation receipt")
                 if event["kind"] == "completed":
                     self._check_child(self.pending)
+                    if self.pending.get("operation_version") == 2 and (
+                            event.get("prepared_sha256") != self.prepared["sha256"]
+                            or event["artifact_sha256"] != self.prepared["commitment"]["artifact_sha256"]):
+                        raise ValueError("Completed operation commitment mismatch")
                     self.current = Path(self.pending["out"]) / "c1/validated_requirements.json"
                     if _hash(self.current.read_bytes()) != event["artifact_sha256"]:
                         raise ValueError("Published snapshot no longer matches receipt")
                 self.pending = None
+                self.prepared = None
             elif event["kind"] == "consistency_review":
                 from c1_requirement_quality.consistency_review import validate_record
                 validate_record(event["record"])
@@ -220,6 +257,8 @@ class DemoSession:
         return data
 
     def _append(self, kind: str, **values: Any) -> None:
+        if self._registry_anchor is not None:
+            raise ValueError("Registry journal prefix is read-only")
         event = {"sequence": len(self.events) + 1, "previous": self.events[-1]["sha256"] if self.events else None,
                  "kind": kind, **values}
         event["sha256"] = _hash(json.dumps(event, sort_keys=True).encode())
@@ -246,52 +285,158 @@ class DemoSession:
         return data, text, manifest, state
 
     def _check_child(self, operation):
+        matches = [event for event in _verified_journal(self.workspace, self._registry_anchor)
+                   if event["kind"] == "pending" and event.get("operation_id") == operation.get("operation_id")]
+        if len(matches) != 1 or matches[0] != operation:
+            raise ValueError("Recovery operation disagrees with the durable journal")
+        operation = matches[0]
         actions = Path(operation["actions"])
         parent = Path(operation["parent"])
         child = Path(operation["out"]) / "c1/validated_requirements.json"
-        if _hash(actions.read_bytes()) != operation["actions_sha256"] or _hash(parent.read_bytes()) != operation["parent_sha256"]:
+        actions_raw = actions.read_bytes()
+        parent_raw = parent.read_bytes()
+        if _hash(actions_raw) != operation["actions_sha256"] or _hash(parent_raw) != operation["parent_sha256"]:
             raise ValueError("Pending action or parent changed; recovery refused")
+        from c1_requirement_quality.source_integrity import VerifiedWorkflowContext, resolve_workflow_policy, require_refinement_grounding
+        from c1_requirement_quality.workflow_persistence import _candidate_snapshot_identity, refinement_operation_binding
+        from c1_requirement_quality.rag.candidate_validation import _canonical
+        _, _, parent_manifest, parent_state = resolve_workflow_policy(VerifiedWorkflowContext(parent, self.source))
+        if _hash(parent_raw) != parent_manifest["artifact_sha256"]:
+            raise ValueError("Recovery parent artifact digest mismatch")
         from c1_requirement_quality.contract import validate_contract_artifact as _validate_contract_artifact
-        _validate_contract_artifact(json.loads(child.read_text(encoding="utf-8-sig")))
-        state, _ = load_state(child, self.source)
+        child_raw = child.read_bytes()
+        _, _, manifest, state = resolve_workflow_policy(VerifiedWorkflowContext(child, self.source))
+        if _hash(child_raw) != manifest["artifact_sha256"]:
+            raise ValueError("Recovery child artifact digest mismatch")
+        artifact = json.loads(child_raw)
+        _validate_contract_artifact(artifact)
         if not state.get("parent") or (child.parent / state["parent"]["artifact_path"]).resolve() != parent.resolve():
             raise ValueError("Recovery child has unexpected ancestry")
+        if operation.get("operation_version") == 2:
+            if operation["registry_anchor"] != {"sequence": operation["sequence"] - 1,
+                                                "sha256": operation["previous"]}:
+                raise ValueError("Recovery registry cutoff must precede its pending operation")
+            if self.prepared is None:
+                raise ValueError("Operation-bound recovery requires a prepared child receipt")
+            # Reopen only through the independently retained prepared event. It
+            # precedes this child's completed event, so replay strictly descends.
+            prefix = DemoSession(self.workspace, _registry_anchor={
+                "sequence": self.prepared["sequence"], "sha256": self.prepared["sha256"]},
+                analyser_factory=self._analyser_factory)
+            if prefix.pending != operation or prefix.prepared != self.prepared:
+                raise ValueError("Recovery operation is not independently journal-bound")
+            require_refinement_grounding(parent_manifest)
+            commitment = prefix.prepared["commitment"]
+            expected = {"version": 1, "snapshot_id": state["snapshot_id"],
+                "artifact_sha256": _hash(child_raw), "workflow_sha256": manifest["workflow_sha256"],
+                "manifest_sha256": _hash(_canonical(manifest)),
+                "diagnostics_sha256": _hash((child.parent / "refinement_diagnostics.json").read_bytes())}
+            if (commitment != expected or state["snapshot_id"] != operation["child_snapshot_id"]
+                    or _candidate_snapshot_identity(parent_manifest, parent_state) != operation["parent_identity"]
+                    or _hash(_canonical(json.loads(actions_raw))) != operation["actions_parsed_sha256"]
+                    or state.get("operation_binding") != refinement_operation_binding(operation)
+                    or _hash(_canonical(state.get("parent_evidence_links"))) != operation["evidence_links_sha256"]):
+                raise ValueError("Operation-bound child commitment mismatch")
+            if operation["evidence_candidate_ids"]:
+                from c1_requirement_quality.workflow_persistence import verify_child_evidence_links
+                verify_child_evidence_links(child, self.source, registry_workspace=self.workspace,
+                    registry_anchor=operation["registry_anchor"], analyser_factory=self._analyser_factory)
+            elif "parent_evidence_links" in state or (child.parent / "candidate_evidence").exists():
+                raise ValueError("Unexpected child evidence selection")
+        elif "operation_binding" in state:
+            raise ValueError("Operation-bound child cannot use legacy recovery")
+        return state
 
     def recover(self, adopt: bool) -> None:
-        if self.pending is None:
+        if self._registry_anchor is not None:
+            raise ValueError("Registry journal prefix is read-only")
+        requested = self.pending
+        fresh = DemoSession(self.workspace, analyser_factory=self._analyser_factory)
+        if requested is None:
+            self.__dict__.update(fresh.__dict__)
             return
-        operation = self.pending
+        matches = [event for event in fresh.events if event["kind"] == "pending"
+                   and event.get("operation_id") == requested.get("operation_id")]
+        if len(matches) != 1 or matches[0] != requested:
+            raise ValueError("Recovery operation disagrees with the durable journal")
+        terminal = [event for event in fresh.events if event["kind"] in {"completed", "cancelled"}
+                    and event["operation_id"] == requested["operation_id"]]
+        if terminal:
+            self.__dict__.update(fresh.__dict__)
+            if (terminal[-1]["kind"] == "completed") != adopt:
+                raise ValueError("Operation already has a conflicting durable terminal outcome")
+            return
+        if fresh.pending != requested:
+            raise ValueError("Recovery operation disagrees with the durable journal")
+        if self.prepared is not None and self.prepared != fresh.prepared:
+            raise ValueError("Recovery operation is not independently journal-bound")
+        self.__dict__.update(fresh.__dict__)
+        operation = fresh.pending
         if adopt:
-            self._check_child(operation)
+            state = self._check_child(operation)
             child = Path(operation["out"]) / "c1/validated_requirements.json"
-            self._append("completed", operation_id=operation["operation_id"], artifact_sha256=_hash(child.read_bytes()))
+            from c1_requirement_quality.source_integrity import require_refinement_grounding
+            require_refinement_grounding(verify_source(Path(operation["parent"]), self.source)[1])
+            if operation.get("operation_version") != 2 and (
+                    "parent_evidence_links" in state or (child.parent / "candidate_evidence").exists()):
+                raise ValueError("Evidence-linked recovery requires operation-bound staging; adoption blocked")
+            values = ({"artifact_sha256": self.prepared["commitment"]["artifact_sha256"],
+                       "prepared_sha256": self.prepared["sha256"]} if operation.get("operation_version") == 2
+                      else {"artifact_sha256": _hash(child.read_bytes())})
+            self._append("completed", operation_id=operation["operation_id"], **values)
             self.current = child
         else:
             self._append("cancelled", operation_id=operation["operation_id"], note="Human declined replay/adoption; files retained")
         self.pending = None
+        self.prepared = None
 
     def apply(self, action: dict[str, Any] | list[dict[str, Any]], reviewer: str, confirmed: bool,
-              *, consistency_reviews: list[dict[str, Any]] | None = None) -> None:
+              *, consistency_reviews: list[dict[str, Any]] | None = None,
+              evidence_candidate_ids: list[str] | None = None, analyser_factory=None) -> None:
         from c1_requirement_quality.cli import refine_run
         if not confirmed or not isinstance(reviewer, str) or not reviewer.strip():
             raise ValueError("Explicit confirmation and reviewer identity are required")
         if self.pending is not None:
             raise ValueError("Resolve pending operation before another action")
-        _, _, manifest, _ = self.read()
+        _, _, manifest, state = self.read()
         from c1_requirement_quality.source_integrity import require_refinement_grounding
         require_refinement_grounding(manifest)
+        if self._registry_anchor is not None:
+            raise ValueError("Registry journal prefix is read-only")
+        if analyser_factory is not None:
+            self._analyser_factory = analyser_factory
+        from c1_requirement_quality.rag.candidate_validation import _canonical
+        from c1_requirement_quality.source_integrity import VerifiedWorkflowContext
+        from c1_requirement_quality.workflow_persistence import build_parent_evidence_links, _candidate_snapshot_identity
+        anchor = {"sequence": len(self.events), "sha256": self.events[-1]["sha256"] if self.events else None}
+        ids = copy.deepcopy(evidence_candidate_ids) if evidence_candidate_ids is not None else []
+        links = (build_parent_evidence_links(VerifiedWorkflowContext(self.current, self.source), self.workspace,
+            ids, analyser_factory=self._analyser_factory, registry_anchor=anchor) if ids else None)
         token = uuid.uuid4().hex
         actions = self.workspace / "actions" / f"{token}.json"
         actions_list = action if isinstance(action, list) else [action]
         payload = {"requirements": [{**copy.deepcopy(item), "actor_id": reviewer.strip()} for item in actions_list]}
         if consistency_reviews is not None:
             payload["consistency_reviews"] = copy.deepcopy(consistency_reviews)
-        _write(actions, payload)
+        actions_raw = json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        _write(actions, actions_raw)
         out = self.workspace / "snapshots" / token
-        self._append("pending", operation_id=token, parent=str(self.current), parent_sha256=_hash(self.current.read_bytes()),
-                     actions=str(actions), actions_sha256=_hash(actions.read_bytes()), out=str(out))
+        self._append("pending", operation_version=2, operation_id=token, workspace=str(self.workspace),
+            parent=str(self.current), parent_sha256=manifest["artifact_sha256"],
+            parent_identity=_candidate_snapshot_identity(manifest, state), actions=str(actions),
+            actions_sha256=_hash(actions_raw), actions_parsed_sha256=_hash(_canonical(payload)), out=str(out),
+            registry_anchor=anchor, evidence_candidate_ids=ids, evidence_links_sha256=_hash(_canonical(links)),
+            child_snapshot_id="SNAPSHOT-" + token)
         self.pending = self.events[-1]
-        refine_run(self.current, self.source, actions, out)
+        self.prepared = None
+        def prepared(commitment):
+            self._append("prepared", operation_id=token, pending_sha256=self.pending["sha256"],
+                         commitment=commitment)
+            self.prepared = self.events[-1]
+            return self.prepared
+        refine_run(self.current, self.source, actions, out,
+            evidence_registry=self.workspace if ids else None, evidence_candidate_ids=ids if ids else None,
+            analyser_factory=self._analyser_factory, _operation=self.pending, _prepared=prepared)
         self.recover(True)
 
     def review_receipt(self, sidecar: Path, accepted: bool, item: str) -> None:
@@ -311,9 +456,12 @@ class DemoSession:
         from c1_requirement_quality.rag.rag_grounding_analyser import RAGGroundingAnalyser
         from c1_requirement_quality.workflow_persistence import candidate_evidence_path, _candidate_snapshot_identity
         from c1_requirement_quality.source_integrity import VerifiedWorkflowContext, resolve_workflow_policy
+        if self._registry_anchor is not None:
+            raise ValueError("Registry journal prefix is read-only")
+        factory = analyser_factory or self._analyser_factory or RAGGroundingAnalyser
         # Refresh journal ordering before reserving a slot; concurrent append still
         # uses exclusive publication and cannot overwrite another registration.
-        current = DemoSession(self.workspace)
+        current = DemoSession(self.workspace, analyser_factory=factory)
         if current.pending is not None:
             raise ValueError("Resolve pending operation before registering evidence")
         policy = VerifiedWorkflowContext(current.current, current.source)
@@ -326,7 +474,6 @@ class DemoSession:
         slot = candidate_evidence_path(self.workspace, relative)
         slot.mkdir(parents=True, exist_ok=False)
         evidence = candidate_evidence_path(self.workspace, relative + "/evidence.json")
-        factory = analyser_factory or RAGGroundingAnalyser
         digest = validate_candidate_run(current.current, current.source, requirement_id,
             candidate_text, evidence, analyser_factory=factory)
         record = load_candidate_validation(evidence, current.current, current.source,
@@ -348,7 +495,7 @@ class DemoSession:
         _write(target, trusted_bytes)
         current._append("candidate_evidence_registered", artifact_sha256=manifest["artifact_sha256"],
             snapshot_identity=identity, reference=relative + "/reference.json", reference_sha256=trusted_digest)
-        self.__init__(self.workspace)
+        self.__init__(self.workspace, analyser_factory=factory)
         return digest
 
     def candidate_grounding_context(self, *, analyser_factory=None):
@@ -356,7 +503,7 @@ class DemoSession:
         from c1_requirement_quality.source_integrity import VerifiedWorkflowContext
         from c1_requirement_quality.workflow_persistence import restore_candidate_receipts
         return restore_candidate_receipts(self.workspace,
-            VerifiedWorkflowContext(self.current, self.source), analyser_factory=analyser_factory)
+            VerifiedWorkflowContext(self.current, self.source), analyser_factory=analyser_factory or self._analyser_factory)
 
     def consistency_pairs(self, *, gate_policy: bool = False):
         from c1_requirement_quality.consistency_review import pair_views

@@ -100,7 +100,7 @@ def restore_candidate_receipts(workspace: Path, context, *, analyser_factory=Non
     from c1_requirement_quality.rag.rag_grounding_analyser import RAGGroundingAnalyser
     from c1_requirement_quality.demo_workflow import DemoSession
     _, _, manifest, state = resolve_workflow_policy(context)
-    session = DemoSession(workspace)
+    session = DemoSession(workspace, analyser_factory=analyser_factory)
     if (session.current.resolve() != context.input_path.resolve()
             or session.source.resolve() != context.source.resolve()):
         raise ValueError("Candidate registry workflow context mismatch")
@@ -142,8 +142,20 @@ def restore_candidate_receipts(workspace: Path, context, *, analyser_factory=Non
 PARENT_EVIDENCE_PURPOSE = "historical-parent-bound-transition-evidence"
 
 
+def refinement_operation_binding(operation: dict[str, Any]) -> dict[str, Any]:
+    """Project an independently journal-verified pending event into child metadata.
+
+    This projection alone is not provenance or permission to publish/adopt.
+    """
+    return {"version": 1, "operation_id": operation["operation_id"],
+            "pending_sha256": operation["sha256"],
+            **{key: copy.deepcopy(operation[key]) for key in (
+                "parent_identity", "actions_sha256", "actions_parsed_sha256", "registry_anchor",
+                "evidence_candidate_ids", "evidence_links_sha256", "child_snapshot_id")}}
+
+
 def build_parent_evidence_links(parent_context, registry_workspace: Path, candidate_ids: list[str], *,
-                                analyser_factory=None) -> dict[str, Any]:
+                                analyser_factory=None, registry_anchor=None) -> dict[str, Any]:
     """Build metadata only, from independently anchored parent registrations.
 
     No files are copied or published. Archive paths preserve the original relative
@@ -162,7 +174,8 @@ def build_parent_evidence_links(parent_context, registry_workspace: Path, candid
     identity = _candidate_snapshot_identity(manifest, state)
     # Replay verifies each registration against the snapshot actually active at
     # that event, including historical parents after the session has advanced.
-    session = DemoSession(registry_workspace)
+    session = DemoSession(registry_workspace, _registry_anchor=registry_anchor,
+                          analyser_factory=analyser_factory)
     registered = {}
     for event in session.events:
         if event["kind"] != "candidate_evidence_registered":
@@ -194,8 +207,181 @@ def build_parent_evidence_links(parent_context, registry_workspace: Path, candid
     return {"version": 1, "purpose": PARENT_EVIDENCE_PURPOSE, "links": links}
 
 
+def _write_evidence_archive(c1_dir: Path, relative: str, raw: bytes) -> None:
+    """Create one archive file relative to pinned, non-reparse directory handles.
+
+    Path checks are only preflight. Actual creation never resolves the full
+    destination again. Unsupported handle operations fail before file creation.
+    """
+    candidate_evidence_path(c1_dir, relative)
+    absolute = Path(os.path.abspath(c1_dir))
+    parts = relative.split("/")
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        import msvcrt
+
+        class UnicodeString(ctypes.Structure):
+            _fields_ = [("Length", wintypes.USHORT), ("MaximumLength", wintypes.USHORT),
+                        ("Buffer", wintypes.LPWSTR)]
+
+        class ObjectAttributes(ctypes.Structure):
+            _fields_ = [("Length", wintypes.ULONG), ("RootDirectory", wintypes.HANDLE),
+                        ("ObjectName", ctypes.POINTER(UnicodeString)), ("Attributes", wintypes.ULONG),
+                        ("SecurityDescriptor", ctypes.c_void_p), ("SecurityQualityOfService", ctypes.c_void_p)]
+
+        class IoStatus(ctypes.Structure):
+            _fields_ = [("StatusOrPointer", ctypes.c_void_p), ("Information", ctypes.c_size_t)]
+
+        class AttributeTag(ctypes.Structure):
+            _fields_ = [("FileAttributes", wintypes.DWORD), ("ReparseTag", wintypes.DWORD)]
+
+        native = ctypes.WinDLL("ntdll", use_last_error=True)
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        native.NtCreateFile.argtypes = [ctypes.POINTER(wintypes.HANDLE), wintypes.ULONG,
+            ctypes.POINTER(ObjectAttributes), ctypes.POINTER(IoStatus), ctypes.c_void_p,
+            wintypes.ULONG, wintypes.ULONG, wintypes.ULONG, wintypes.ULONG, ctypes.c_void_p, wintypes.ULONG]
+        native.NtCreateFile.restype = wintypes.LONG
+        native.RtlNtStatusToDosError.argtypes = [wintypes.LONG]
+        native.RtlNtStatusToDosError.restype = wintypes.ULONG
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.restype = wintypes.BOOL
+        kernel.GetFileInformationByHandleEx.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+        kernel.GetFileInformationByHandleEx.restype = wintypes.BOOL
+        kernel.GetDriveTypeW.argtypes = [wintypes.LPCWSTR]
+        kernel.GetDriveTypeW.restype = wintypes.UINT
+        anchor = absolute.anchor
+        if anchor.startswith("\\\\") or kernel.GetDriveTypeW(anchor) not in {2, 3, 6}:
+            raise OSError("Evidence archiving requires a local Windows filesystem")
+        handles = []
+
+        def open_relative(name, parent, *, directory, create, pin=False):
+            buffer = ctypes.create_unicode_buffer(name)
+            length = len(name.encode("utf-16-le"))
+            if length > 65532:
+                raise ValueError("Archive path component is too long")
+            string = UnicodeString(length, length + 2, ctypes.cast(buffer, wintypes.LPWSTR))
+            # OBJ_DONT_REPARSE | OBJ_CASE_INSENSITIVE. The archive root and
+            # descendants request list access so write/delete share denial is
+            # enforced (attribute-only handles do not prevent Windows renames).
+            attributes = ObjectAttributes(ctypes.sizeof(ObjectAttributes), parent,
+                ctypes.pointer(string), 0x1040, None, None)
+            handle, status_block = wintypes.HANDLE(), IoStatus()
+            options = 0x200000 | (0x1 if directory else 0x60)
+            access = (0x81 if pin else 0x80) if directory else 0x100002
+            status = native.NtCreateFile(ctypes.byref(handle), access,
+                ctypes.byref(attributes), ctypes.byref(status_block), None,
+                0x10 if directory else 0x80, 1 if directory else 0,
+                (3 if create else 1) if directory else 2, options, None, 0)
+            if status < 0:
+                error = ctypes.WinError(native.RtlNtStatusToDosError(status))
+                error.filename = name
+                raise error
+            if directory:
+                info = AttributeTag()
+                if not kernel.GetFileInformationByHandleEx(handle, 9, ctypes.byref(info), ctypes.sizeof(info)):
+                    error = ctypes.WinError(ctypes.get_last_error())
+                    kernel.CloseHandle(handle)
+                    raise error
+                if info.FileAttributes & 0x400:
+                    kernel.CloseHandle(handle)
+                    raise ValueError("Candidate evidence symlink/reparse escape")
+                handles.append(handle)
+            return handle
+
+        try:
+            parent = open_relative("\\??\\" + anchor, None, directory=True, create=False,
+                                   pin=len(absolute.parts) == 1)
+            for index, part in enumerate(absolute.parts[1:], 1):
+                parent = open_relative(part, parent, directory=True, create=False,
+                                       pin=index == len(absolute.parts) - 1)
+            for part in parts[:-1]:
+                parent = open_relative(part, parent, directory=True, create=True, pin=True)
+            handle = open_relative(parts[-1], parent, directory=False, create=True)
+            try:
+                descriptor = msvcrt.open_osfhandle(handle.value, os.O_WRONLY | os.O_BINARY)
+            except BaseException:
+                kernel.CloseHandle(handle)
+                raise
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+        finally:
+            for handle in reversed(handles):
+                kernel.CloseHandle(handle)
+    else:
+        if (not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY")
+                or os.open not in os.supports_dir_fd or os.mkdir not in os.supports_dir_fd):
+            raise OSError("Secure handle-relative evidence creation is unavailable")
+        handles = []
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        try:
+            parent = os.open(absolute.anchor, flags)
+            handles.append(parent)
+            for part in absolute.parts[1:]:
+                parent = os.open(part, flags, dir_fd=parent)
+                handles.append(parent)
+            for part in parts[:-1]:
+                try:
+                    os.mkdir(part, mode=0o700, dir_fd=parent)
+                except FileExistsError:
+                    pass
+                parent = os.open(part, flags, dir_fd=parent)
+                handles.append(parent)
+            descriptor = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                 0o600, dir_fd=parent)
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+        finally:
+            for descriptor in reversed(handles):
+                os.close(descriptor)
+
+
+def archive_parent_evidence_links(parent_context, registry_workspace: Path, c1_dir: Path,
+                                  candidate_ids: list[str], *, analyser_factory=None,
+                                  registry_anchor=None) -> dict[str, Any]:
+    """Copy verified original bytes exclusively into an unpublished child bundle.
+
+    Return metadata for sealing in the workflow snapshot. Partial files remain
+    untrusted staging data on failure; neither repair nor publication occurs.
+    """
+    if (not c1_dir.is_dir() or c1_dir.is_symlink()
+            or getattr(c1_dir.lstat(), "st_file_attributes", 0)
+            & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)):
+        raise ValueError("Evidence archive requires an owned staging directory")
+    if any((c1_dir / "internal" / name).exists() for name in
+           ("source_manifest.json", WORKFLOW_FILE)):
+        raise ValueError("Evidence archive must precede workflow sealing")
+    links = build_parent_evidence_links(parent_context, registry_workspace, candidate_ids,
+                                        analyser_factory=analyser_factory, registry_anchor=registry_anchor)
+    copies = {}
+    for link in links["links"]:
+        for key, digest in (("reference_path", "reference_sha256"), ("evidence_path", "receipt_sha256")):
+            relative = link[key]
+            destination = candidate_evidence_path(c1_dir, relative)
+            if destination in copies:
+                raise ValueError("Duplicate evidence archive destination")
+            if destination.exists():
+                raise FileExistsError(destination)
+            raw = candidate_evidence_path(registry_workspace, relative).read_bytes()
+            if sha256(raw) != link[digest]:
+                raise ValueError("Evidence changed before archiving")
+            copies[destination] = raw
+    for destination, raw in copies.items():
+        relative = destination.relative_to(c1_dir).as_posix()
+        candidate_evidence_path(c1_dir, relative)
+        _write_evidence_archive(c1_dir, relative, raw)
+    if build_parent_evidence_links(parent_context, registry_workspace, candidate_ids,
+                                   analyser_factory=analyser_factory, registry_anchor=registry_anchor) != links:
+        raise ValueError("Parent evidence changed during archiving")
+    return links
+
+
 def verify_child_evidence_links(child_path: Path, source: Path, *, registry_workspace: Path,
-                                analyser_factory=None) -> dict[str, Any]:
+                                analyser_factory=None, registry_anchor=None) -> dict[str, Any]:
     """Read sealed child metadata and verify P -> E -> C, never child approval.
 
     Evidence is loaded against the immediate ORIGINAL parent, not the child.
@@ -243,7 +429,7 @@ def verify_child_evidence_links(child_path: Path, source: Path, *, registry_work
                 raise ValueError("Duplicate or ambiguous evidence archive path")
             archive_paths.add(resolved)
     expected = build_parent_evidence_links(parent_context, registry_workspace, ids,
-                                           analyser_factory=analyser_factory)
+                                           analyser_factory=analyser_factory, registry_anchor=registry_anchor)
     if envelope != expected:
         raise ValueError("Child links differ from trusted parent evidence")
     # Compare only content parsed from these exact, hash-verified bytes. A later
@@ -597,7 +783,7 @@ def current_answer_actions(state: dict[str, Any]) -> list[dict[str, Any]]:
 
 def refine_with_history(artifact: dict[str, Any], actions: dict[str, Any], source_text: str,
                         parent: dict[str, Any], parent_path: Path, final_c1_dir: Path,
-                        manifest: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+                        manifest: dict[str, Any], *, snapshot_id: str | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     from c1_requirement_quality.source_integrity import require_refinement_grounding, VerifiedWorkflowContext, resolve_workflow_policy
     source = parent_path.parent / "internal" / manifest["archived_source"]
     policy_context = VerifiedWorkflowContext(parent_path, source)
@@ -614,7 +800,11 @@ def refine_with_history(artifact: dict[str, Any], actions: dict[str, Any], sourc
         raise ValueError("Actions require requirements and optional consistency_reviews lists")
     from c1_requirement_quality.effective_consistency import context_from_state, views, create_review, assess_all
     state = copy.deepcopy(parent)
-    state.update(snapshot_id="SNAPSHOT-" + uuid.uuid4().hex, round=parent["round"] + 1,
+    # These links describe one immediate-parent transition. Its audit history
+    # remains in the immutable parent, never as current links on a grandchild.
+    state.pop("parent_evidence_links", None)
+    state.pop("operation_binding", None)
+    state.update(snapshot_id=snapshot_id or "SNAPSHOT-" + uuid.uuid4().hex, round=parent["round"] + 1,
                  parent={"snapshot_id": parent["snapshot_id"],
                          "artifact_path": os.path.relpath(parent_path.resolve(), final_c1_dir.resolve()).replace("\\", "/"),
                          "artifact_sha256": manifest["artifact_sha256"], "workflow_sha256": manifest.get("workflow_sha256"),
