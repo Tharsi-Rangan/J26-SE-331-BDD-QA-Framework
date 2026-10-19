@@ -12,6 +12,7 @@ from typing import Any
 import uuid
 
 from .demo_workflow import DemoSession, _session_lock
+from .refinement import stable_candidate_id
 from .validation_lifecycle import clarification_resolution
 from .effective_consistency import assess, context_from_state
 from .bdd_readiness import is_single_requirement_no_peers
@@ -718,6 +719,7 @@ class Wizard:
                 self.display(f"Please enter one of the displayed numbers (between 1 and {len(options)}). Type 'help' for guidance or 'pause' to pause safely.", "yellow")
 
     def publish(self, session, action):
+        rag = bool(session.read()[2].get("rag_policy"))
         self.tell("Review this change for " + action["requirement_id"])
         for answer in action.get("clarification_answers", []):
             self.tell("Answer: " + answer["answer"])
@@ -729,7 +731,7 @@ class Wizard:
         if "human_decision" in action:
             self.tell("Human decision: " + action["human_decision"])
             if action["human_decision"] == "approved":
-                rows = session.read()[0]["requirements"]
+                rows = session.review_read()[0]["requirements"]
                 row = next(r for r in rows if r["requirement_id"] == action["requirement_id"])
                 candidate = next((c for c in row.get("candidates", [])
                                   if c["candidate_id"] == row.get("selected_candidate_id")), None)
@@ -746,8 +748,13 @@ class Wizard:
         reviewer = self.ask("Your name or reviewer label (blank cancels): ").strip()
         if reviewer and self.ask("Record this change? Type yes to confirm: ").strip().lower() == "yes":
             with redirect_stdout(io.StringIO()):
-                session.apply(action, reviewer, True)
-            self.tell("Saved and rechecked. Answering or selecting does not approve a requirement.")
+                if rag:
+                    session.review_action(action, reviewer, True)
+                else:
+                    session.apply(action, reviewer, True)
+            self.tell("Approval intent recorded; publication and BDD readiness remain blocked."
+                      if rag and action.get("human_decision") == "approved" else
+                      "Saved and rechecked. Answering or selecting does not approve a requirement.")
             return True
         self.tell("Cancelled. No change recorded.")
         return False
@@ -808,7 +815,7 @@ class Wizard:
                              "Existing sessions are preserved; technical information is available in Details.") from error
         self.display("Analysis complete. Verified session ready for human review.", "green")
         if session.meta.get("mandatory_rag"):
-            self.display("Initial RAG analysis is available for inspection. RAG refinement integration is pending; edits and approvals cannot be published yet.", "yellow")
+            self.display("Initial RAG analysis is available for grounded candidate review, clarification and approval intent. Final publication and BDD readiness remain blocked.", "yellow")
         return session
 
     def choose_session(self):
@@ -991,7 +998,7 @@ class Wizard:
             else: return
 
     def questions(self, session, requirement_id=None):
-        data, _, _, state = session.read()
+        data, _, _, state = session.review_read()
         questions = []
         for row in data["requirements"]:
             if requirement_id and row["requirement_id"] != requirement_id: continue
@@ -1013,7 +1020,7 @@ class Wizard:
             self.tell("Question: " + question["text"])
             self.tell("Guidance: Supply the missing fact so this requirement can be verified for BDD testing.")
             while True:
-                _, _, _, latest_state = session.read()
+                _, _, _, latest_state = session.review_read()
                 record = latest_state["requirements"][row["requirement_id"]]
                 current = record["questions"][question["question_id"]]
                 previous = next((a for a in record["answers"] if a["answer_id"] == current["current_answer_id"]), None)
@@ -1051,7 +1058,7 @@ class Wizard:
                 if span: value["replaces_span"] = span
                 if self.menu("Answer preview: " + answer, ["Save answer", "Back"]) == 1:
                     if self.publish(session, {"requirement_id": row["requirement_id"], "clarification_answers": [value]}):
-                        latest = session.read()[3]["requirements"][row["requirement_id"]]
+                        latest = session.review_read()[3]["requirements"][row["requirement_id"]]
                         resolved = clarification_resolution(latest, row["original_text"], [])
                         if next(q for q in resolved["assessments"] if q["question_id"] == question["question_id"])["resolved"]:
                             break
@@ -1178,6 +1185,8 @@ class Wizard:
                 self.tell(f"Added pending question to {rid}. It must now be answered by a human.")
 
     def candidates(self, session, requirement_id=None):
+        if session.read()[2].get("rag_policy"):
+            return self.rag_candidates(session, requirement_id)
         from .rewrite_generator import generate_candidates_run
         data, _, _, state = session.read()
         items = [(r["requirement_id"], c) for r in data["requirements"]
@@ -1254,6 +1263,37 @@ class Wizard:
             if choice == 3: action["human_decision"] = "rejected"
             self.publish(session, action)
             return
+
+    def rag_candidates(self, session, requirement_id=None):
+        """Present journal-backed drafts using the existing review services."""
+        data = session.review_read()[0]
+        rows = [r for r in data["requirements"] if requirement_id is None or r["requirement_id"] == requirement_id]
+        choice = self.menu("Grounded candidate review", ["Generate offline candidates", "Review saved candidates", "Write a manual rewrite", "Back"])
+        if choice == 4:
+            return
+        if choice == 3:
+            return self.manual(session, requirement_id)
+        if choice == 1:
+            self.tell("Generating deterministic proposals and verifying local RAG evidence. Missing facts are never invented.")
+            result = session.generate_review_candidates([r["requirement_id"] for r in rows])
+            for item in result["requirements"]:
+                if not item["ranked_candidates"]:
+                    self.tell(item["requirement_id"] + ": " + (item.get("zero_candidates_reason") or item.get("blocked_reason") or "Abstained; clarification needed."))
+            rows = [r for r in session.review_read()[0]["requirements"] if requirement_id is None or r["requirement_id"] == requirement_id]
+        for row in rows:
+            for candidate in row["candidates"]:
+                self.tell(row["requirement_id"] + ": " + candidate["text"])
+                choice = self.menu("Candidate decision", ["Select candidate", "Verify evidence", "Reject candidate", "Back"])
+                if choice == 4:
+                    return
+                if choice == 2:
+                    self.verify_candidate_evidence(session, row["requirement_id"], candidate)
+                    continue
+                action = {"requirement_id": row["requirement_id"], "selected_candidate_text": candidate["text"]}
+                if choice == 3:
+                    action["human_decision"] = "rejected"
+                self.publish(session, action)
+                return
 
     def generate_candidates_groq(self, session, requirement_id=None):
         self.tell("\n" + "=" * 70)
@@ -1339,12 +1379,22 @@ class Wizard:
         policy_context = VerifiedWorkflowContext(session.current, session.source)
         if manifest.get("rag_policy") or grounding_context is not None:
             from .rag.candidate_validation import context_for_snapshot
+            if manifest.get("rag_policy") and grounding_context is None and isinstance(session, DemoSession):
+                grounding_context = session.candidate_grounding_context()
             grounding_context = context_for_snapshot(session.current, session.source, grounding_context)
         row = next(r for r in data["requirements"] if r["requirement_id"] == rid)
         record = state["requirements"][rid]
         evaluation = _evaluate_candidate(candidate["text"], text, row["original_text"], record,
             source_format="docx" if session.source.suffix.lower() == ".docx" else None,
             grounding_context=grounding_context, requirement_id=rid, workflow_context=policy_context)
+        if manifest.get("rag_policy") and isinstance(session, DemoSession):
+            data, _, _, state = session.review_read()
+            record = state["requirements"][rid]
+            for peer in data["requirements"]:
+                draft = state["requirements"][peer["requirement_id"]]
+                selected = draft["candidates"].get(draft["selected_candidate_id"])
+                if selected is not None:
+                    peer["final_text"] = selected["text"]
         consistency = _consistency_with_candidate(rid, candidate["text"], data["requirements"],
             state["requirements"], context_from_state(state))
         unresolved = clarification_resolution(record, row["original_text"], [])["unresolved_questions"]
@@ -1356,7 +1406,18 @@ class Wizard:
         return {"evaluation": evaluation, "consistency": consistency, "tier": tier, "validation": validation}
 
     def verify_candidate_evidence(self, session, rid, candidate, assessment=None):
-        """Optional read-only advisory verification of candidate rewrite against source SRS evidence."""
+        """Register authoritative RAG evidence, or show legacy advisory verification."""
+        if session.read()[2].get("rag_policy"):
+            context = session.candidate_grounding_context()
+            if stable_candidate_id(rid, candidate["text"]) not in context.receipts:
+                self.tell("Verifying and registering local candidate evidence; the existing 3 GiB guard applies.")
+                session.validate_candidate_evidence(rid, candidate["text"])
+            result = self.candidate_assessment(session, rid, candidate)
+            self.tell("Registered RAG evidence: " + str(result["evaluation"]["grounding"].get("verdict")))
+            self.tell("Eligibility: " + str(result["evaluation"]["candidate_eligible"]) + "; no approval or publication implied.")
+            self.tell("Candidate checks: " + str(result["validation"]["checks"]))
+            self.tell("Tier assessment: " + result["tier"]["tier"])
+            return
         self.tell("\n" + "=" * 70)
         self.tell("Verify Candidate against SRS Evidence (Local DeBERTa NLI)")
         self.tell("=" * 70)
@@ -1679,7 +1740,7 @@ class Wizard:
         self.tell("Blocked requirements cannot proceed until all required checks and explicit review pass.")
 
     def approval(self, session, requirement_id=None, *, original_only=False):
-        rows = session.read()[0]["requirements"]
+        rows = session.review_read()[0]["requirements"]
         choice = next((i + 1 for i, r in enumerate(rows) if r["requirement_id"] == requirement_id), None) if requirement_id else None
         if choice is None:
             choice = self.menu("Choose a requirement for explicit approval", [r["requirement_id"] for r in rows] + ["Back"])
@@ -1688,6 +1749,24 @@ class Wizard:
             self.requirement(row, session)
             candidate = next((c for c in row.get("candidates", []) if c["candidate_id"] == row.get("selected_candidate_id")), None)
             if original_only: candidate = None
+            if session.read()[2].get("rag_policy"):
+                if candidate:
+                    self.verify_candidate_evidence(session, row["requirement_id"], candidate)
+                    self.tell("Exact selected candidate for approval intent: " + candidate["text"])
+                self.tell("This records review intent only. Final publication and BDD readiness remain blocked.")
+                options = (["Approve selected candidate", "Reject selected candidate"] if candidate else []) + ["Request clarification", "Back"]
+                selected = options[self.menu("Human decision", options) - 1]
+                if selected == "Back":
+                    return
+                if selected == "Request clarification":
+                    question = self.ask("Clarification question (blank cancels): ").strip()
+                    if question:
+                        self.publish(session, {"requirement_id": row["requirement_id"],
+                            "workflow_action": "request_clarification", "clarification_questions": [question]})
+                    return
+                self.publish(session, {"requirement_id": row["requirement_id"],
+                    "human_decision": "approved" if selected == "Approve selected candidate" else "rejected"})
+                return
             if candidate:
                 self.tell("Exact selected candidate text: " + candidate["text"])
                 assessment = self.candidate_assessment(session, row["requirement_id"], candidate)
@@ -1699,7 +1778,7 @@ class Wizard:
             decision = self.menu("Human decision", options)
             if candidate and decision == 1:
                 action = {"requirement_id": row["requirement_id"], "human_decision": "approved"}
-                record = session.read()[3]["requirements"][row["requirement_id"]]
+                record = session.review_read()[3]["requirements"][row["requirement_id"]]
                 if record["escalation_active"]:
                     self.tell("An escalation is active. Acceptance requires an explicit resolution statement and revalidation.")
                     resolution = self.ask("How was the escalation resolved? (blank cancels): ").strip()
@@ -1708,7 +1787,7 @@ class Wizard:
                     self.tell("Escalation resolution to record: " + resolution)
                 self.publish(session, action)
             elif options[decision - 1] == "No rewrite needed - accept original":
-                record = session.read()[3]["requirements"][row["requirement_id"]]
+                record = session.review_read()[3]["requirements"][row["requirement_id"]]
                 unresolved = clarification_resolution(record, row["original_text"], [])["unresolved_questions"]
                 blockers = []
                 if row["tier"] != "TIER_1_AUTO_REFINE":
@@ -1726,7 +1805,7 @@ class Wizard:
                 self.publish(session, {"requirement_id": row["requirement_id"], "human_decision": "not_required"})
 
     def manual(self, session, requirement_id=None):
-        rows = session.read()[0]["requirements"]
+        rows = session.review_read()[0]["requirements"]
         if requirement_id is None:
             choice = self.menu("Choose a requirement to rewrite", [r["requirement_id"] for r in rows] + ["Back"])
             if choice > len(rows): return
@@ -1870,6 +1949,10 @@ class Wizard:
         """Choose presentation only; existing services retain all decision policy."""
         record = state["requirements"][row["requirement_id"]]
         if row["bdd_ready"]: return "complete"
+        if session.read()[2].get("rag_policy") and any(
+                intent["active"] and intent["action"]["requirement_id"] == row["requirement_id"]
+                for intent in session.approval_intents()):
+            return "intent_recorded"
         if clarification_resolution(record, row["original_text"], [])["unresolved_questions"]:
             return "questions"
         if row.get("selected_candidate_id") and row["human_decision"] == "pending":
@@ -1889,11 +1972,11 @@ class Wizard:
         self.tell("Step 1 - Analysis overview and summary")
         self.overview(session)
         self.summary(session)
-        rows = session.read()[0]["requirements"]
+        rows = session.review_read()[0]["requirements"]
         # Cursor and skipped items are navigation only, never persisted decisions.
         index = next((i for i, row in enumerate(rows) if not row["bdd_ready"]), len(rows))
         while index < len(rows):
-            data, _, _, state = session.read()
+            data, _, _, state = session.review_read()
             rows = data["requirements"]
             row = rows[index]
             rid = row["requirement_id"]
@@ -1902,6 +1985,7 @@ class Wizard:
             action = self.next_action(session, row, state)
             labels = {"questions": "Answer unresolved clarification questions", "consistency": "Review unresolved consistency comparisons",
                       "manual": "Write a manual rewrite", "candidates": "Review safe suggestions / registered candidates",
+                      "intent_recorded": "Continue (approval intent recorded; publication blocked)",
                       "approval": "Review selected candidate and explicitly approve", "complete": "Continue (already BDD-ready)"}
             if action == "manual" and state["requirements"][rid]["escalation_active"]:
                 self.tell("Escalation reasons: " + "; ".join(c["explanation"] for c in row["consistency"].get("conflicts", [])))
@@ -1921,7 +2005,7 @@ class Wizard:
             elif choice == 3:
                 index = max(0, index - 1)
                 continue
-            elif choice == 2 or action == "complete":
+            elif choice == 2 or action in {"complete", "intent_recorded"}:
                 index += 1
                 continue
             else:
@@ -1929,7 +2013,7 @@ class Wizard:
                  "candidates": self.candidates, "approval": self.approval}[action](session, rid)
             if session.pending: return  # Resolve interruptions in the session recovery screen.
             self.tell("Step 3 - Reclassification from the current verified snapshot")
-            latest = next(r for r in session.read()[0]["requirements"] if r["requirement_id"] == rid)
+            latest = next(r for r in session.review_read()[0]["requirements"] if r["requirement_id"] == rid)
             self.requirement(latest, session)
             if latest["bdd_ready"]: index += 1
         self.tell("Step 4 - Final summary (skipped requirements remain blocked)")

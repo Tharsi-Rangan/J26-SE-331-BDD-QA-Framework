@@ -85,6 +85,9 @@ class DeterministicSubstitutionBackend:
     3. placeholder_substitution: resolves placeholders with user-confirmed clarification answers.
     """
 
+    def __init__(self, *, structural_only_alternative: bool = False):
+        self.structural_only_alternative = structural_only_alternative
+
     def generate(
         self,
         requirement_text: str,
@@ -95,6 +98,13 @@ class DeterministicSubstitutionBackend:
         max_candidates: int = 3,
     ) -> list[dict[str, Any]]:
         candidates: list[dict[str, Any]] = []
+
+        if self.structural_only_alternative:
+            normalized = re.sub(r"\s+", " ", requirement_text).strip()
+            if normalized and not normalized.endswith((".", "!", "?")):
+                candidates.append({"text": normalized + ".", "strategy": "terminal_punctuation",
+                                   "source_evidence": {"kind": "srs_chunk", "text": requirement_text,
+                                                       "source": "original_srs"}})
 
         # Strategy 1: Modal normalization
         modal_candidate = self._apply_modal_normalization(requirement_text, evidence_chunks)

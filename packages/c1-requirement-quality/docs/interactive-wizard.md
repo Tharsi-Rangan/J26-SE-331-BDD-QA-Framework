@@ -1,5 +1,44 @@
 # Stage 4E: beginner terminal wizard
 
+## M1: grounded review and approval intent
+
+Initial-RAG sessions support offline candidate generation, manual proposals,
+candidate selection, clarification answers, rejection and explicit approval
+intent in the existing wizard. These actions append to the session journal;
+they do not replace the sealed requirement artifact or create a refined child.
+Resume reconstructs the review draft and verifies approval evidence without
+rerunning inference. Guided review advances past an active approval intent while
+continuing to show publication as blocked.
+
+Candidate generation reuses the deterministic backend, existing eligibility
+checks and advisory ranking. Each new proposal is registered through candidate
+RAG validation before evaluation. At most three proposals are evaluated per
+requirement. Initial-RAG generation also permits a terminal full stop when it
+is missing; the alternative passes the same evidence and meaning checks.
+The generator abstains when it has no safe transformation, when
+clarification is unresolved, or when an escalation remains active. Conservative
+meaning checks can reject paraphrases; this is not a general language model
+rewriter. Model loading retains the existing offline and memory guards.
+
+Approval intent requires an explicit reviewer and confirmation, independently
+registered receipt/reference evidence, preserved meaning, passing quality and
+BDD testability checks, complete consistency coverage (or the existing single
+requirement exception), and resolved clarification/escalation state. Existing
+tier rules are reused, including their explicit-human-review assessment.
+Answers retain human provenance and cannot supply original-SRS grounding.
+Changes to selection, questions, answers or peer state invalidate previous
+intents, including changing a selection back to its earlier value.
+
+Approval records bind the source, parent artifact/workflow, original and exact
+candidate text, receipt/reference journal event, verifier policy, complete review
+basis, checks and reviewer decision. Restart rechecks this chain. The journal
+and session files remain the trusted local storage boundary; reviewer labels
+are not authenticated digital signatures. Historical records are retained.
+Final initial-RAG publication, BDD readiness and C2 handoff remain blocked.
+Legacy publication behavior is unchanged. Direct Python callers can use
+`DemoSession.generate_review_candidates()`, `review_action()`, `review_read()`
+and `approval_intents()`; `read()` continues to return the sealed snapshot.
+
 ## Phase 2, Step 3: mandatory initial RAG grounding
 
 Step 3B.1 adds a conservative applicability check. Exact symbolic evidence and
@@ -51,13 +90,13 @@ and `rag_failure.json`, and prevent initial run/registry publication. A neutral
 result is an executed check with an unresolved claim, not a model failure or
 successful grounding. Existing source, approval and C2 schema policies remain.
 
-This is the initial-analysis-only integration step. New RAG runs are available
-for inspection and export, with pending approvals and no BDD-ready rows.
-Refinement publication and candidate sidecar generation are deliberately refused
-for the sealed `c1-initial-rag-v1` policy until the same RAG and human-evidence
-validation are integrated into refinement. A CLI refinement cannot silently
-replace authoritative RAG with lexical checks. Old sessions and advanced lexical
-runs retain their existing behavior; existing data is never backfilled.
+New RAG runs retain pending contract approvals and no BDD-ready rows. The M1
+review journal above permits candidate and clarification work separately from
+sealed outputs. Refinement publication and the legacy candidate-sidecar CLI
+remain refused for `c1-initial-rag-v1`; use the wizard's grounded review service.
+A CLI refinement cannot silently replace authoritative RAG with lexical checks.
+Old sessions and advanced lexical runs retain their existing behavior; existing
+data is never backfilled.
 
 ## Phase 2, Step 2: mandatory initial local classification
 

@@ -85,7 +85,7 @@ def _session_lock(workspace: Path):
 
 
 class DemoSession:
-    """Append-only session receipts; C1 workflow state is never duplicated here."""
+    """Append-only review intents alongside independently sealed C1 snapshots."""
 
     @classmethod
     def create(cls, workspace: Path, *, artifact: Path | None = None, source: Path | None = None,
@@ -187,6 +187,8 @@ class DemoSession:
         self.events = []
         self.pending = None
         self.prepared = None
+        self._review_state = None
+        self._approval_intents = []
         for event in _verified_journal(self.workspace, _registry_anchor):
             if event["kind"] == "pending":
                 if self.pending is not None or event["parent"] != str(self.current):
@@ -232,10 +234,312 @@ class DemoSession:
                 _, _, manifest, state = resolve_workflow_policy(VerifiedWorkflowContext(self.current, self.source))
                 if event.get("snapshot_identity") != _candidate_snapshot_identity(manifest, state):
                     raise ValueError("Candidate registry verified snapshot identity mismatch")
+            elif event["kind"] in {"refinement_review", "approval_intent"}:
+                if self.pending is not None:
+                    raise ValueError("Review cannot overlap a pending publication")
+                self._replay_refinement_review(event)
             elif event["kind"] != "review":
                 raise ValueError("Unknown demo journal event")
             self.events.append(event)
         self.read()
+
+    def review_read(self):
+        """Display-only draft overlay. Never a published or approvable C1 artifact."""
+        data, text, manifest, state = self.read()
+        if not manifest.get("rag_policy"):
+            return data, text, manifest, state
+        state = copy.deepcopy(self._review_state or state)
+        data = copy.deepcopy(data)
+        for row in data["requirements"]:
+            record = state["requirements"][row["requirement_id"]]
+            row["candidates"] = [{"candidate_id": cid, "text": c["text"]}
+                                 for cid, c in record["candidates"].items()]
+            row["selected_candidate_id"] = record["selected_candidate_id"]
+            row["human_decision"] = "pending"
+            row["bdd_ready"] = False
+        return data, text, manifest, state
+
+    def _review_basis(self, state):
+        from c1_requirement_quality.rag.candidate_validation import _canonical, verification_policy
+        _, _, manifest, parent = self.read()
+        from c1_requirement_quality.workflow_persistence import _candidate_snapshot_identity
+        return {"parent": _candidate_snapshot_identity(manifest, parent),
+                "source_manifest_sha256": _hash(_canonical(manifest)),
+                "draft_sha256": _hash(_canonical(state)),
+                "verification_policy": verification_policy()}
+
+    def _review_evaluation(self, rid, state):
+        """Recheck receipt against sealed P; draft answers never become SRS evidence."""
+        from c1_requirement_quality.workflow_persistence import (
+            _candidate_snapshot_identity, _read_candidate_reference, candidate_evidence_path,
+        )
+        from c1_requirement_quality.rag.candidate_validation import CandidateGroundingContext
+        from c1_requirement_quality.rag.rag_grounding_analyser import RAGGroundingAnalyser
+        from c1_requirement_quality.source_integrity import VerifiedWorkflowContext
+        from c1_requirement_quality.effective_consistency import context_from_state
+        data, text, manifest, parent = self.read()
+        row = next(r for r in data["requirements"] if r["requirement_id"] == rid)
+        record = state["requirements"][rid]
+        cid = record["selected_candidate_id"]
+        candidate = record["candidates"].get(cid)
+        if candidate is None or candidate["status"] == "REJECTED":
+            raise ValueError("Select a non-rejected candidate before approval intent")
+        refs = []
+        for event in self.events:
+            if (event["kind"] == "candidate_evidence_registered"
+                    and event["snapshot_identity"] == _candidate_snapshot_identity(manifest, parent)):
+                reference = _read_candidate_reference(self.workspace, event)
+                if reference["candidate_id"] == cid:
+                    refs.append((event, reference))
+        if len(refs) != 1:
+            raise ValueError("Exactly one journal-registered candidate receipt required")
+        event, reference = refs[0]
+        if reference["requirement_id"] != rid or reference["candidate_text"] != candidate["text"]:
+            raise ValueError("Candidate registry selection mismatch")
+        context = CandidateGroundingContext(self.current, self.source,
+            {cid: (candidate_evidence_path(self.workspace, reference["evidence"]), reference["receipt_sha256"])},
+            reference["top_k"], self._analyser_factory or RAGGroundingAnalyser)
+        evaluation = _evaluate_candidate(candidate["text"], text, row["original_text"],
+            parent["requirements"][rid], grounding_context=context, requirement_id=rid,
+            workflow_context=VerifiedWorkflowContext(self.current, self.source))
+        if (evaluation["grounding"].get("validation_binding") != reference["binding"]
+                or evaluation["grounding"].get("models") != reference["models"]):
+            raise ValueError("Candidate receipt and registered reference binding mismatch")
+        peers = copy.deepcopy(data["requirements"])
+        for peer in peers:
+            draft = state["requirements"][peer["requirement_id"]]
+            selected = draft["candidates"].get(draft["selected_candidate_id"])
+            if selected is not None:
+                peer["final_text"] = selected["text"]
+        consistency = _consistency_with_candidate(rid, candidate["text"], peers,
+            state["requirements"], context_from_state(state))
+        unresolved = clarification_resolution(record, row["original_text"], [])["unresolved_questions"]
+        tier = classify_tier(evaluation["quality_findings"], evaluation["grounding"], consistency,
+            original_text=row["original_text"], candidate_text=candidate["text"],
+            unresolved_clarification=bool(unresolved), human_reviewed=True)
+        validation = _candidate_validation(evaluation, consistency, text=candidate["text"], tier=tier["tier"],
+            clarification_questions=unresolved, escalation_active=record["escalation_active"])
+        return {"candidate_id": cid, "candidate_text_sha256": _hash(candidate["text"].encode()),
+                "original_sha256": _hash(row["original_text"].encode()),
+                "registry_event_sha256": event["sha256"], "reference_sha256": event["reference_sha256"],
+                "receipt_sha256": reference["receipt_sha256"], "binding": reference["binding"],
+                "evaluation": evaluation, "consistency": consistency, "tier": tier, "validation": validation}
+
+    def _replay_refinement_review(self, event):
+        from c1_requirement_quality.workflow_persistence import _question, _answer, _event
+        from c1_requirement_quality.bdd_readiness import is_single_requirement_no_peers
+        _, _, manifest, parent = self.read()
+        if not manifest.get("rag_policy"):
+            raise ValueError("Initial-RAG review requires verified RAG provenance")
+        if type(event.get("review_version")) is not int or event["review_version"] != 1:
+            raise ValueError("Unsupported refinement review version")
+        state = copy.deepcopy(self._review_state or parent)
+        if event.get("basis") != self._review_basis(state):
+            raise ValueError("Stale refinement review basis")
+        actor = event.get("reviewer")
+        if not isinstance(actor, str) or not actor.strip():
+            raise ValueError("Explicit reviewer required")
+        action = event["action"]
+        allowed = {"requirement_id", "selected_candidate_text", "selected_candidate_id", "candidate_texts",
+                   "clarification_questions", "clarification_answers", "question_actions", "workflow_action", "human_decision"}
+        if not isinstance(action, dict) or set(action) - allowed:
+            raise ValueError("Unsupported initial-RAG review action")
+        rid = action.get("requirement_id")
+        if rid not in state["requirements"]:
+            raise ValueError("Unknown review requirement")
+        record = state["requirements"][rid]
+        decision = action.get("human_decision")
+        work = action.get("workflow_action")
+        if decision not in {None, "approved", "rejected"} or work not in {None, "request_clarification", "reopen"}:
+            raise ValueError("Initial-RAG approval/publication integration is pending; unsupported action")
+        if event["kind"] == "approval_intent":
+            if set(action) != {"requirement_id", "human_decision", "selected_candidate_id"}:
+                raise ValueError("Approval intent requires a separate exact selection decision")
+            if decision != "approved" or action["selected_candidate_id"] != record["selected_candidate_id"]:
+                raise ValueError("Approval intent selection mismatch")
+            checked = self._review_evaluation(rid, state)
+            if checked != event.get("eligibility"):
+                raise ValueError("Approval intent eligibility mismatch")
+            if (not checked["evaluation"]["candidate_eligible"]
+                    or any(v != "pass" for k, v in checked["validation"]["checks"].items() if k != "consistency")
+                    or (checked["consistency"]["check"] != "pass"
+                        and not is_single_requirement_no_peers(checked["consistency"]))
+                    or record["clarification_requested"] or record["escalation_active"]
+                    or checked["tier"]["tier"] != "TIER_1_AUTO_REFINE"):
+                raise ValueError("Candidate is not eligible for approval intent")
+            if any(i["basis"] == event["basis"] and i["action"] == action for i in self._approval_intents):
+                raise ValueError("Repeated approval intent")
+            if event.get("publication_authorized") is not False or event.get("bdd_ready_authorized") is not False:
+                raise ValueError("Approval intent cannot authorize publication or readiness")
+            self._approval_intents.append(copy.deepcopy(event))
+            return
+        if decision == "approved":
+            raise ValueError("Approval requires independently verified approval intent")
+        texts = action.get("candidate_texts", [])
+        if not isinstance(texts, list) or len(texts) > 3:
+            raise ValueError("At most three supplied candidates per action")
+        texts = list(texts)
+        if "selected_candidate_text" in action:
+            texts.append(action["selected_candidate_text"])
+        for text in texts:
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError("Candidate text must be nonempty")
+            cid = stable_candidate_id(rid, text)
+            record["candidates"].setdefault(cid, {"text": text, "status": "PROPOSED"})
+        selected = action.get("selected_candidate_id", record["selected_candidate_id"])
+        if "selected_candidate_text" in action:
+            derived = stable_candidate_id(rid, action["selected_candidate_text"])
+            if "selected_candidate_id" in action and selected != derived:
+                raise ValueError("Candidate ID and text disagree")
+            selected = derived
+        if selected is not None and selected not in record["candidates"]:
+            raise ValueError("Unknown selected candidate")
+        if (selected is not None and record["candidates"][selected]["status"] == "REJECTED"
+                and ("selected_candidate_id" in action or "selected_candidate_text" in action)):
+            raise ValueError("Rejected candidate cannot be selected")
+        record["selected_candidate_id"] = selected
+        questions = action.get("clarification_questions", [])
+        answers = action.get("clarification_answers", [])
+        operations = action.get("question_actions", [])
+        if any(not isinstance(v, list) for v in (questions, answers, operations)):
+            raise ValueError("Clarification collections must be lists")
+        # Stable IDs and timestamps derive from the independently retained event,
+        # so replay produces exactly the same clarification basis.
+        for question in questions:
+            _question(state, rid, question, "human_question", actor)
+        for answer in answers:
+            if not isinstance(answer, dict) or set(answer) - {"question_id", "question", "answer", "replaces_span"}:
+                raise ValueError("Invalid human clarification fields")
+            _answer(state, rid, answer, actor, origin="initial_rag_review_journal")
+        if work == "reopen" and not operations:
+            operations = [{"question_id": qid, "status": "REOPENED"} for qid in record["questions"]]
+        for operation in operations:
+            if (not isinstance(operation, dict) or set(operation) != {"question_id", "status"}
+                    or operation["status"] != "REOPENED" or operation["question_id"] not in record["questions"]):
+                raise ValueError("Only explicit question reopening is supported")
+            question = record["questions"][operation["question_id"]]
+            question.update(status="REOPENED", current_answer_id=None)
+        if work in {"reopen", "request_clarification"}:
+            record["clarification_requested"] = True
+        elif answers:
+            original = next(r["original_text"] for r in self.read()[0]["requirements"] if r["requirement_id"] == rid)
+            record["clarification_requested"] = bool(clarification_resolution(record, original, [])["unresolved_questions"])
+        if decision == "rejected":
+            if selected is None:
+                raise ValueError("Select a candidate to reject")
+            record["candidates"][selected]["status"] = "REJECTED"
+        _event(state, rid, "refinement_review", actor, action)
+        # Replace generated audit IDs with journal-derived identities before hashing.
+        replacements = {}
+        new_events = state["events"][len((self._review_state or parent)["events"]):]
+        for index, item in enumerate(new_events):
+            replacements[item["event_id"]] = f"REVIEW-{event['sequence']}-{index}"
+            item["recorded_at"] = event["recorded_at"]
+        for index, answer in enumerate(record["answers"]):
+            if answer["event_id"] in replacements:
+                replacements[answer["answer_id"]] = f"REVIEW-ANSWER-{event['sequence']}-{index}"
+        def stable(value):
+            if isinstance(value, dict):
+                return {k: stable(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [stable(v) for v in value]
+            return replacements.get(value, value) if isinstance(value, str) else value
+        state = stable(state)
+        self._review_state = state
+
+    def review_action(self, action, reviewer, confirmed):
+        """Record a draft or approval intent; never call refinement publication."""
+        from datetime import datetime, timezone
+        if confirmed is not True or not isinstance(reviewer, str) or not reviewer.strip():
+            raise ValueError("Explicit reviewer and confirmation required")
+        if not isinstance(action, dict):
+            raise ValueError("Review action must be an object")
+        if self._registry_anchor is not None:
+            raise ValueError("Registry journal prefix is read-only")
+        current = DemoSession(self.workspace, analyser_factory=self._analyser_factory)
+        if current.pending is not None:
+            raise ValueError("Resolve pending publication first")
+        state = current._review_state or current.read()[3]
+        kind = "approval_intent" if action.get("human_decision") == "approved" else "refinement_review"
+        action = copy.deepcopy(action)
+        if action.get("requirement_id") not in state["requirements"]:
+            raise ValueError("Unknown review requirement")
+        if kind == "approval_intent":
+            rid = action["requirement_id"]
+            action.setdefault("selected_candidate_id", state["requirements"][rid]["selected_candidate_id"])
+        values = {"review_version": 1, "action": action, "reviewer": reviewer.strip(), "basis": current._review_basis(state),
+                  "recorded_at": datetime.now(timezone.utc).isoformat()}
+        if kind == "approval_intent":
+            values.update(eligibility=current._review_evaluation(action["requirement_id"], state),
+                          publication_authorized=False, bdd_ready_authorized=False)
+        event = {"kind": kind, "sequence": len(current.events) + 1, **values}
+        current._replay_refinement_review(event)
+        if current._review_basis(state) != values["basis"]:
+            raise ValueError("Review provenance changed before journal publication")
+        current._append(kind, **values)
+        self.__init__(self.workspace, analyser_factory=self._analyser_factory)
+
+    def approval_intents(self):
+        """Reverify durable provenance and expose stale intents as historical only."""
+        current = DemoSession(self.workspace, analyser_factory=self._analyser_factory)
+        basis = current._review_basis(current._review_state or current.read()[3])
+        return [{**copy.deepcopy(event), "active": event["basis"] == basis}
+                for event in current._approval_intents]
+
+    def generate_review_candidates(self, requirement_ids=None, *, backend=None):
+        """Use existing offline generator and ranking after trusted receipt registration."""
+        from c1_requirement_quality.rewrite_generator import generate_candidate_suggestions, DeterministicSubstitutionBackend
+        from c1_requirement_quality.source_integrity import VerifiedWorkflowContext
+        data, text, manifest, state = self.read()
+        if not manifest.get("rag_policy"):
+            raise ValueError("Initial-RAG review generation requires verified provenance")
+        context = self.candidate_grounding_context()
+        session = self
+        generator = backend or DeterministicSubstitutionBackend(structural_only_alternative=True)
+        class RegisteredBackend:
+            def __init__(self):
+                self.index = 0
+            def generate(self, *args, **kwargs):
+                proposals = generator.generate(*args, **kwargs)[:3]
+                rid = generation_ids[self.index]
+                self.index += 1
+                for proposal in proposals:
+                    cid = stable_candidate_id(rid, proposal["text"])
+                    if cid not in context.receipts:
+                        session.validate_candidate_evidence(rid, proposal["text"])
+                        context.receipts.update(session.candidate_grounding_context().receipts)
+                return proposals
+        draft = self.review_read()[3]
+        from c1_requirement_quality.workflow_persistence import current_answer_actions
+        from c1_requirement_quality.effective_consistency import context_from_state
+        from c1_requirement_quality.rewrite_generator import check_eligibility
+        answers = current_answer_actions(draft)
+        blocked = {rid for rid, record in draft["requirements"].items()
+                   if record["escalation_active"] or record["clarification_requested"]}
+        for row in data["requirements"]:
+            record = draft["requirements"][row["requirement_id"]]
+            if clarification_resolution(record, row["original_text"], [])["unresolved_questions"]:
+                blocked.add(row["requirement_id"])
+        # Match the existing generator's actual backend call order, including
+        # skipped requirements and duplicate original text under distinct IDs.
+        generation_ids = [row["requirement_id"] for row in data["requirements"]
+                          if (requirement_ids is None or row["requirement_id"] in requirement_ids)
+                          and row["requirement_id"] not in blocked
+                          and check_eligibility(row, next(a["clarification_answers"] for a in answers
+                                                        if a["requirement_id"] == row["requirement_id"]))[0]]
+        result = generate_candidate_suggestions(data, text, backend=RegisteredBackend(),
+            clarification_answers=answers, workflow_records=state["requirements"],
+            consistency_context=context_from_state(state), requirement_ids=requirement_ids,
+            workflow_blocked_ids=blocked,
+            workflow_rejected_ids={cid for record in draft["requirements"].values()
+                                   for cid, c in record["candidates"].items() if c["status"] == "REJECTED"},
+            grounding_context=context, workflow_context=VerifiedWorkflowContext(self.current, self.source))
+        for item in result["requirements"]:
+            texts = [c["text"] for c in item["ranked_candidates"][:3]]
+            if texts:
+                self.review_action({"requirement_id": item["requirement_id"], "candidate_texts": texts},
+                                   "system:deterministic-generator", True)
+        return result
 
     def initial_ml_predictions(self):
         """Validate saved initial-text scores; never replay inference on resume."""
