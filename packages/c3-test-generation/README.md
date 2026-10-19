@@ -169,6 +169,17 @@ test code) and `suite_error` (Jest could not load the file) mean the test is bro
 On the golden example all 7 tests pass all 4 checks; with an off-by-one bug (`age > 64`) the age-65 test is
 `subject_error` ("age out of range"), not a broken test.
 
+### Repair loop (C3-12, PP1 version)
+
+Only **broken** tests are repaired: a check fails (syntactic, referential, traceability) or Jest reports
+`test_error` / `suite_error`. A test that fails because the code under test throws or an expect() fails may
+have found a bug, so it is never "repaired" into passing.
+
+Each round (at most 3), the model gets its previous answer and the errors, answers again (checked like C3-08),
+and all tests are rebuilt and run again. A scenario still broken after 3 rounds gets no runnable test (a
+broken test is never released); C3-13 routes it to a stub. `repair_rounds` goes into `test_manifest.json`;
+every round is logged in `c3/work/repair_log.json`.
+
 ### Model client (C3-06)
 
 All model calls go through one `ModelClient` (`src/model/`). Settings come only from `.env`
