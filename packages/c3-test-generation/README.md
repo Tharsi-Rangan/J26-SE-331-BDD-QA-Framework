@@ -149,6 +149,26 @@ The tests expect the subject at `<run folder>/<source.repo_path>` (default `subj
 On the golden example the 7 generated tests pass, every Jest full name equals its manifest name, and an
 off-by-one bug (`age > 64`) makes exactly the age-65 test fail.
 
+### Verification (C3-11, PP1 version)
+
+After writing the tests, `c3 run` runs them with Jest in a sandbox on the given subject and records four
+checks per test in `test_manifest.json` (`verification`), with details in `c3/work/verification.json`:
+
+| Layer          | PP1 check                                                                                                  |
+| -------------- | ---------------------------------------------------------------------------------------------------------- |
+| `syntactic`    | the file parses and Jest loads it                                                                          |
+| `referential`  | the module under test, the names taken from it and internal mocked modules exist in the subject           |
+| `traceability` | TST embeds SCN, the name is `[REQ] ... [SCN][TST] ...`, C2 fully verified it, Jest reported that exact name |
+| `semantic`     | rule-based grounding score: 0.5 x category agrees with the rule guess + 0.5 x share of literal values found in the steps (pass >= 0.5). The cross-encoder is planned for PP2. |
+
+Each Jest result is sorted by cause, because C3 usually runs on the version C4 will mutate (the buggy one):
+`passed`, `assertion_failed` (an expect() failed) and `subject_error` (the code under test threw) are kept,
+as they may have found a bug (check on the fixed version, C3-14); `test_error` (the error is raised in the
+test code) and `suite_error` (Jest could not load the file) mean the test is broken and go to repair (C3-12).
+
+On the golden example all 7 tests pass all 4 checks; with an off-by-one bug (`age > 64`) the age-65 test is
+`subject_error` ("age out of range"), not a broken test.
+
 ### Model client (C3-06)
 
 All model calls go through one `ModelClient` (`src/model/`). Settings come only from `.env`

@@ -51,6 +51,8 @@ export interface SandboxOptions {
   repoPath?: string;
   /** Replace or add files in the sandbox, e.g. one test file during repair. Path -> content. */
   overrides?: ReadonlyMap<string, string>;
+  /** Copy <runDir>/c3 into the sandbox (default true). False: only `overrides` are written. */
+  copyRun?: boolean;
 }
 
 /** Make a sandbox; the caller removes it with removeSandbox(). */
@@ -58,11 +60,12 @@ export function makeSandbox(o: SandboxOptions): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'c3-jest-'));
   // A package.json here makes Node treat the subject's .js as CommonJS even under a "type": "module" folder.
   fs.writeFileSync(path.join(dir, 'package.json'), '{"private": true, "type": "commonjs"}\n');
-  fs.cpSync(path.join(o.runDir, 'c3'), path.join(dir, 'c3'), {
-    recursive: true,
-    filter: (src) =>
-      !src.includes(`${path.sep}work${path.sep}`) && !src.endsWith(`${path.sep}work`),
-  });
+  if (o.copyRun !== false && fs.existsSync(path.join(o.runDir, 'c3')))
+    fs.cpSync(path.join(o.runDir, 'c3'), path.join(dir, 'c3'), {
+      recursive: true,
+      filter: (src) =>
+        !src.includes(`${path.sep}work${path.sep}`) && !src.endsWith(`${path.sep}work`),
+    });
   copySubject(o.subjectRoot, path.join(dir, o.repoPath ?? 'subject-src'));
   for (const [rel, content] of o.overrides ?? []) {
     const f = path.join(dir, rel);
