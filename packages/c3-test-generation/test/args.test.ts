@@ -9,6 +9,11 @@ describe('c3 parseRunArgs', () => {
     expect(opts.in).toBe(path.join(base, 'runs', 'RUN-1'));
     expect(opts.out).toBe(path.join(base, 'runs', 'RUN-1'));
     expect(opts.subjectRoot).toBeUndefined();
+    expect(opts.noModel).toBeUndefined();
+  });
+
+  test('--no-model turns the model off (C3-07)', () => {
+    expect(parseRunArgs(['run', '--out', 'x', '--no-model']).noModel).toBe(true);
   });
 
   test('rejects a missing run command', () => {

@@ -7,6 +7,8 @@ export interface RunOptions {
   out: string;
   srs?: string;
   subjectRoot?: string;
+  /** --no-model: never call a model; rule defaults are used (also the default when .env has no model). */
+  noModel?: boolean;
 }
 
 /**
@@ -22,6 +24,7 @@ export function parseRunArgs(argv: string[], baseDir = callerDir()): RunOptions 
       out: { type: 'string' },
       srs: { type: 'string' },
       'subject-root': { type: 'string' },
+      'no-model': { type: 'boolean' },
     },
   });
   if (positionals[0] !== 'run') {
@@ -36,6 +39,7 @@ export function parseRunArgs(argv: string[], baseDir = callerDir()): RunOptions 
     out: path.resolve(baseDir, values.out),
     srs: abs(values.srs),
     subjectRoot: abs(values['subject-root']),
+    ...(values['no-model'] ? { noModel: true } : {}),
   };
 }
 

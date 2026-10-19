@@ -48,6 +48,33 @@ The function under test is the manifest export named in the scenario text (or th
 `mock` decision gets a rule-based default `behaviour`; C3-07 replaces it with behaviour derived from
 the Given/When steps.
 
+### Mock behaviour (C3-07)
+
+For every `mock` decision, the model says **what** the mock does; the rule (C3-05) already decided
+**whether** to mock. The prompt gives the model the scenario's Given/When steps numbered `S1, S2, ...`,
+the dependency's signature and side effect, and the rule's reason. The model answers with one JSON object:
+
+```json
+{ "steps": ["S1"], "kind": "returns_input", "value": { "id": "u1" }, "error_message": null,
+  "summary": "save() returns the given user with id 'u1'.", "rationale": "S1 says the repository is available, ..." }
+```
+
+- `kind` is one of `returns`, `returns_input`, `throws`, `resolves`, `rejects`.
+- C3 checks the answer: known step ids only, `kind` from the list, `value` / `error_message` when the
+  kind needs them, `resolves`/`rejects` only for functions that return a Promise, short sentences.
+- A bad answer gets **one retry** with the problems listed. A second bad answer keeps the rule default
+  (`source: "rule_default"` in the work file), so nothing invalid reaches the contract file.
+- A Promise signature turns `returns`/`throws` into `resolves`/`rejects` (recorded as a note).
+- Review warnings (not errors): a cited step sounds like a failure but the mock succeeds, or the other way round.
+
+Output: `behaviour` in `c3/mock_decisions.json` gets the cited step texts, `summary`, `rationale` and the
+model tag. The structured part (`kind`, `value`, ...) goes to `c3/work/mock_behaviour.json` for the Jest
+writer (C3-10), which turns it into Jest code with `behaviourToJest()`, e.g.
+`userRepository.save.mockImplementation((input) => ({ ...{"id":"u1"}, ...input }));`.
+
+`c3 run` uses the model in `.env`. With `--no-model`, or when `.env` has no `LLM_BASE_URL`, it keeps the
+rule defaults and never calls a model.
+
 ### Model client (C3-06)
 
 All model calls go through one `ModelClient` (`src/model/`). Settings come only from `.env`
