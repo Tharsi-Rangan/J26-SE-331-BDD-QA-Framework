@@ -26,8 +26,12 @@ def _write(path: Path, value: Any) -> None:
     """Atomically publish a new journal/action file, never replace existing content."""
     path.parent.mkdir(parents=True, exist_ok=True)
     pending = path.with_name(path.name + ".pending-" + uuid.uuid4().hex)
-    with pending.open("x", encoding="utf-8") as stream:
-        json.dump(value, stream, indent=2, ensure_ascii=False, allow_nan=False)
+    binary = isinstance(value, bytes)
+    with pending.open("xb" if binary else "x", encoding=None if binary else "utf-8") as stream:
+        if binary:
+            stream.write(value)
+        else:
+            json.dump(value, stream, indent=2, ensure_ascii=False, allow_nan=False)
         stream.flush()
         os.fsync(stream.fileno())
     os.link(pending, path)
@@ -148,6 +152,8 @@ class DemoSession:
             raise ValueError("Initial analysis was not published; no operation was replayed. Preserve this workspace and start a fresh one.")
         if self.meta["base_sha256"] and _hash(self.current.read_bytes()) != self.meta["base_sha256"]:
             raise ValueError("Session base artifact changed")
+        if _hash(self.source.read_bytes()) != self.meta["source_sha256"]:
+            raise ValueError("Session SRS changed")
         self.events = []
         self.pending = None
         previous = None
@@ -180,6 +186,16 @@ class DemoSession:
                 if (event["record"]["supersedes"] != expected
                         or event["artifact_sha256"] != _hash(self.current.read_bytes())):
                     raise ValueError("Review supersession or artifact binding mismatch")
+            elif event["kind"] == "candidate_evidence_registered":
+                from c1_requirement_quality.workflow_persistence import candidate_evidence_path, _candidate_snapshot_identity
+                from c1_requirement_quality.source_integrity import VerifiedWorkflowContext, resolve_workflow_policy
+                reference = candidate_evidence_path(self.workspace, event["reference"])
+                if (event["artifact_sha256"] != _hash(self.current.read_bytes())
+                        or _hash(reference.read_bytes()) != event["reference_sha256"]):
+                    raise ValueError("Candidate registry journal binding mismatch")
+                _, _, manifest, state = resolve_workflow_policy(VerifiedWorkflowContext(self.current, self.source))
+                if event.get("snapshot_identity") != _candidate_snapshot_identity(manifest, state):
+                    raise ValueError("Candidate registry verified snapshot identity mismatch")
             elif event["kind"] != "review":
                 raise ValueError("Unknown demo journal event")
             self.events.append(event)
@@ -282,6 +298,66 @@ class DemoSession:
         self._append("review", artifact_sha256=_hash(self.current.read_bytes()), sidecar=str(sidecar.resolve()),
                      sidecar_sha256=_hash(sidecar.read_bytes()), accepted=accepted, item=item)
 
+    def validate_candidate_evidence(self, requirement_id: str, candidate_text: str, *, analyser_factory=None):
+        """Trusted registration: only this fresh producer's receipt may be retained.
+
+        No caller-supplied evidence path or digest is accepted. Exclusive slot and
+        journal publication fail closed on contention; unjournalled files are not
+        restored and are retained for inspection after an interrupted operation.
+        """
+        from c1_requirement_quality.rag.candidate_validation import (
+            validate_candidate_run, load_candidate_validation, _canonical,
+        )
+        from c1_requirement_quality.rag.rag_grounding_analyser import RAGGroundingAnalyser
+        from c1_requirement_quality.workflow_persistence import candidate_evidence_path, _candidate_snapshot_identity
+        from c1_requirement_quality.source_integrity import VerifiedWorkflowContext, resolve_workflow_policy
+        # Refresh journal ordering before reserving a slot; concurrent append still
+        # uses exclusive publication and cannot overwrite another registration.
+        current = DemoSession(self.workspace)
+        if current.pending is not None:
+            raise ValueError("Resolve pending operation before registering evidence")
+        policy = VerifiedWorkflowContext(current.current, current.source)
+        _, _, manifest, state = resolve_workflow_policy(policy)
+        identity = _candidate_snapshot_identity(manifest, state)
+        cid = stable_candidate_id(requirement_id, candidate_text)
+        # One full digest keeps Windows paths compact without truncating identity.
+        slot_id = _hash(_canonical({"snapshot_identity": identity, "candidate_id": cid}))
+        relative = f"candidate_evidence/{slot_id}"
+        slot = candidate_evidence_path(self.workspace, relative)
+        slot.mkdir(parents=True, exist_ok=False)
+        evidence = candidate_evidence_path(self.workspace, relative + "/evidence.json")
+        factory = analyser_factory or RAGGroundingAnalyser
+        digest = validate_candidate_run(current.current, current.source, requirement_id,
+            candidate_text, evidence, analyser_factory=factory)
+        record = load_candidate_validation(evidence, current.current, current.source,
+            requirement_id, candidate_text, expected_sha256=digest, analyser_factory=factory)
+        binding = record["binding"]
+        if any(binding.get(key) != value for key, value in identity.items()):
+            raise ValueError("Candidate registry snapshot changed during registration")
+        reference = {"registry_version": 1, "requirement_id": requirement_id,
+            "candidate_id": cid, "candidate_text": candidate_text,
+            "parent_artifact_sha256": binding["parent_artifact_sha256"],
+            "snapshot_id": binding["snapshot_id"], "binding": binding,
+            "models": record["models"], "top_k": 5,
+            "evidence": relative + "/evidence.json", "receipt_sha256": digest}
+        target = candidate_evidence_path(self.workspace, relative + "/reference.json")
+        # Anchor only the bytes derived from the independently verified record.
+        # A subsequent filesystem edit can never redefine the retained receipt.
+        trusted_bytes = _canonical(reference) + b"\n"
+        trusted_digest = _hash(trusted_bytes)
+        _write(target, trusted_bytes)
+        current._append("candidate_evidence_registered", artifact_sha256=manifest["artifact_sha256"],
+            snapshot_identity=identity, reference=relative + "/reference.json", reference_sha256=trusted_digest)
+        self.__init__(self.workspace)
+        return digest
+
+    def candidate_grounding_context(self, *, analyser_factory=None):
+        """Restore verified candidate receipts without running model inference."""
+        from c1_requirement_quality.source_integrity import VerifiedWorkflowContext
+        from c1_requirement_quality.workflow_persistence import restore_candidate_receipts
+        return restore_candidate_receipts(self.workspace,
+            VerifiedWorkflowContext(self.current, self.source), analyser_factory=analyser_factory)
+
     def consistency_pairs(self, *, gate_policy: bool = False):
         from c1_requirement_quality.consistency_review import pair_views
         data, _, manifest, state = self.read()
@@ -347,7 +423,8 @@ class DemoSession:
         policy_context = VerifiedWorkflowContext(self.current, self.source)
         if manifest.get("rag_policy") or grounding_context is not None:
             from c1_requirement_quality.rag.candidate_validation import context_for_snapshot
-            grounding_context = context_for_snapshot(self.current, self.source, grounding_context)
+            grounding_context = context_for_snapshot(self.current, self.source,
+                grounding_context if grounding_context is not None else self.candidate_grounding_context())
         report = json.loads(path.read_text(encoding="utf-8-sig"))
         if (report.get("input_sha256") != _hash(self.current.read_bytes()) or report.get("source_sha256") != manifest["sha256"]
                 or report.get("document_id") != manifest["document_id"] or report.get("decision_effect") != "none"):
@@ -381,7 +458,8 @@ class DemoSession:
         policy_context = VerifiedWorkflowContext(self.current, self.source)
         if manifest.get("rag_policy") or grounding_context is not None:
             from c1_requirement_quality.rag.candidate_validation import context_for_snapshot
-            grounding_context = context_for_snapshot(self.current, self.source, grounding_context)
+            grounding_context = context_for_snapshot(self.current, self.source,
+                grounding_context if grounding_context is not None else self.candidate_grounding_context())
         report = json.loads(path.read_text(encoding="utf-8-sig"))
         if (report.get("input_sha256") != _hash(self.current.read_bytes())
                 or report.get("source_sha256") != manifest["sha256"]

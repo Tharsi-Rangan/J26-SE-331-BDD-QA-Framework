@@ -21,6 +21,29 @@ from c1_requirement_quality.rag.rag_grounding_analyser import RAGGroundingAnalys
 POLICY = "c1-candidate-rag-v1"
 
 
+def verification_policy() -> dict[str, Any]:
+    """Explicit semantic versions, not detection of arbitrary source-code edits.
+
+    Bump the affected version whenever its verification semantics change. Model
+    assets and retrieval top_k are separately checked by the existing loader.
+    """
+    configuration = {
+        "symbolic": "obligation-and-numeric-interval-v1",
+        "applicability": "explicit-obligation-signature-v1",
+        "fact_extraction": "rule-based-no-spacy-v1",
+        "placeholders": "incomplete-facts-never-supported-v1",
+        "passage_aggregation": "error-contradiction-support-v1",
+        "claim_aggregation": "every-claim-attributed-and-supported-v1",
+        "meaning": "c1-conservative-meaning-v1",
+        "nli": {"score": "finite-real-required-v1", "truncation": True,
+                "label_mapping": "contradiction-entailment-neutral-v1",
+                "confidence_threshold": None},
+        "retrieval": "dense-srs-chunks-v1",
+    }
+    return {"version": 1, "configuration": configuration,
+            "sha256": sha256(_canonical(configuration))}
+
+
 def compare_meaning(original: str, candidate: str) -> dict[str, Any]:
     """Conservative obligation comparison, not a semantic-equivalence model.
 
@@ -149,6 +172,7 @@ def _context(input_path: Path, source: Path, requirement_id: str,
         "workflow_sha256": manifest.get("workflow_sha256"),
         "workflow_basis_sha256": sha256(_canonical(state)),
         "policy": POLICY, "retrieval": {"top_k": top_k, "use_spacy": False},
+        "verification_policy": verification_policy(),
     }
 
 

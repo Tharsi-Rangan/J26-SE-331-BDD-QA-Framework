@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import uuid
+import stat
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,112 @@ BASE_FIELDS = {"requirement_id", "clarification_questions", "clarification_answe
 EXTRA_FIELDS = {"actor_id", "human_timestamp", "workflow_action", "question_actions",
                 "reconsider_candidate_ids", "resolution", "reason"}
 WORKFLOW_ACTIONS = {"approve", "reject", "request_clarification", "escalate", "reopen", "resolve_escalation"}
+
+
+def candidate_evidence_path(workspace: Path, relative: str) -> Path:
+    """Restrict registry files to the session evidence tree; reject reparse points."""
+    if (not isinstance(relative, str) or "\\" in relative or ":" in relative
+            or not relative.startswith("candidate_evidence/")
+            or any(part in {"", ".", ".."} for part in relative.split("/"))):
+        raise ValueError("Unsafe candidate evidence path")
+    root = workspace.resolve()
+    path = root
+    for part in relative.split("/"):
+        path = path / part
+        if path.is_symlink() or (path.exists() and getattr(path.lstat(), "st_file_attributes", 0)
+                                & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)):
+            raise ValueError("Candidate evidence symlink/reparse escape")
+    def comparable(value):
+        # Windows realpath can retain its extended prefix when a directory is
+        # created concurrently. Normalize only that spelling, not path traversal.
+        spelling = str(value)
+        if os.name == "nt":
+            if spelling.startswith("\\\\?\\UNC\\"):
+                spelling = "\\\\" + spelling[8:]
+            elif spelling.startswith("\\\\?\\"):
+                spelling = spelling[4:]
+        return Path(spelling)
+    if not comparable(path.resolve()).is_relative_to(comparable(root)):
+        raise ValueError("Candidate evidence path escapes workspace")
+    return path
+
+
+def _candidate_snapshot_identity(manifest: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+    """Identify an already verified snapshot, including its full workflow basis."""
+    from c1_requirement_quality.rag.candidate_validation import _canonical
+    return {"parent_artifact_sha256": manifest["artifact_sha256"],
+            "snapshot_id": state["snapshot_id"], "workflow_sha256": manifest.get("workflow_sha256"),
+            "workflow_basis_sha256": sha256(_canonical(state))}
+
+
+def restore_candidate_receipts(workspace: Path, context, *, analyser_factory=None):
+    """Use journal-retained digests, never a receipt read from evidence itself.
+
+    Reload the session journal ourselves, rather than accepting caller events.
+    Local storage is the trust anchor; not authentication against wholesale rewriting.
+    """
+    from c1_requirement_quality.source_integrity import resolve_workflow_policy
+    from c1_requirement_quality.rag.candidate_validation import (
+        CandidateGroundingContext, load_candidate_validation,
+    )
+    from c1_requirement_quality.rag.rag_grounding_analyser import RAGGroundingAnalyser
+    from c1_requirement_quality.demo_workflow import DemoSession
+    _, _, manifest, state = resolve_workflow_policy(context)
+    session = DemoSession(workspace)
+    if (session.current.resolve() != context.input_path.resolve()
+            or session.source.resolve() != context.source.resolve()):
+        raise ValueError("Candidate registry workflow context mismatch")
+    current_identity = _candidate_snapshot_identity(manifest, state)
+    factory = analyser_factory or RAGGroundingAnalyser
+    receipts = {}
+    top_k = None
+    for event in session.events:
+        if event["kind"] != "candidate_evidence_registered":
+            continue
+        path = candidate_evidence_path(workspace, event["reference"])
+        raw = path.read_bytes()
+        if sha256(raw) != event["reference_sha256"]:
+            raise ValueError("Candidate registry reference digest mismatch")
+        reference = json.loads(raw)
+        fields = {"registry_version", "parent_artifact_sha256", "snapshot_id", "evidence",
+                  "requirement_id", "candidate_text", "receipt_sha256", "top_k", "candidate_id",
+                  "binding", "models"}
+        if (not isinstance(reference, dict) or set(reference) != fields
+                or any(not isinstance(reference[key], str) for key in
+                       ("parent_artifact_sha256", "snapshot_id", "evidence", "requirement_id",
+                        "candidate_text", "receipt_sha256", "candidate_id"))
+                or reference.get("registry_version") != 1
+                or reference.get("parent_artifact_sha256") != event["artifact_sha256"]):
+            raise ValueError("Candidate registry identity mismatch")
+        # Replay verified this identity against the actual snapshot active at
+        # registration, not just against a caller-provided snapshot identifier.
+        identity = event["snapshot_identity"]
+        if (reference.get("snapshot_id") != identity["snapshot_id"]
+                or not isinstance(reference.get("binding"), dict)
+                or any(reference["binding"].get(key) != value for key, value in identity.items())):
+            raise ValueError("Candidate registry snapshot mismatch")
+        # Equal artifact bytes need not mean equal clarification/workflow state.
+        # Verified historical references remain audit data, never current evidence.
+        if identity != current_identity:
+            continue
+        evidence = candidate_evidence_path(workspace, reference["evidence"])
+        record = load_candidate_validation(evidence, context.input_path, context.source,
+            reference["requirement_id"], reference["candidate_text"],
+            expected_sha256=reference["receipt_sha256"], top_k=reference["top_k"],
+            analyser_factory=factory)
+        if (record["binding"] != reference.get("binding")
+                or record["models"] != reference.get("models")
+                or record["binding"]["candidate_id"] != reference.get("candidate_id")):
+            raise ValueError("Candidate registry evidence binding mismatch")
+        cid = reference["candidate_id"]
+        if cid in receipts:
+            raise ValueError("Duplicate candidate registry reference")
+        if top_k is not None and top_k != reference["top_k"]:
+            raise ValueError("Inconsistent candidate registry retrieval policy")
+        top_k = reference["top_k"]
+        receipts[cid] = (evidence, reference["receipt_sha256"])
+    return CandidateGroundingContext(context.input_path, context.source, receipts,
+                                    top_k or 5, factory)
 
 
 def question_id(requirement_id: str, text: str) -> str:
