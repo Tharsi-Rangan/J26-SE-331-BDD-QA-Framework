@@ -31,6 +31,7 @@ function scenario(name: string, when: string, exportsInScope: string[]): C3Scena
     scenarioId: 'SCN-FX-001-01',
     requirementId: 'REQ-FX-001',
     scenarioName: name,
+    featureName: 'Fixture feature',
     scenarioType: 'positive',
     isOutline: false,
     featureFile: 'c2/features/REQ-FX-001.feature',
@@ -99,7 +100,7 @@ describe('C3-05 mock decisions on the golden example', () => {
     const out = fs.mkdtempSync(path.join(os.tmpdir(), 'c3-md-'));
     try {
       fs.cpSync(GOLDEN, out, { recursive: true });
-      fs.rmSync(path.join(out, 'c3', 'mock_decisions.json'));
+      for (const d of ['c3', 'c4']) fs.rmSync(path.join(out, d), { recursive: true, force: true }); // no stale C3/C4 output
       await run({ in: GOLDEN, out, generatedAt: FIXED_TIME });
       expect(fs.existsSync(path.join(out, 'c3', 'mock_decisions.json'))).toBe(true);
       const res = spawnSync(process.execPath, [VALIDATE, out], { encoding: 'utf8' });

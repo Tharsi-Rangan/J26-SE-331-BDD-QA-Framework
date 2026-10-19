@@ -129,6 +129,26 @@ Rules only (`src/strategy.ts`, `rules_version` 0.1.0), written to `c3/work/strat
 `property_based` (fast-check over a C2 numeric range) is planned for PP2. A plain scenario with a numeric
 range says in its reason that it is a candidate.
 
+### Jest writer (C3-10)
+
+`c3 run` writes, from the assertion plans (C3-08), mock behaviour (C3-07) and strategy (C3-09):
+
+- `c3/runnable_tests/<REQ>.test.js`: one file per requirement, first line `// @requirement REQ-...`, one top-level
+  `describe('[REQ-...] <feature>')`, test titles `[SCN-...][TST-...] <scenario> :: <case>`
+  (`packages/contracts/conventions/jest-tests.md`). Outline rows become `test.each` rows (TST id, case label,
+  then the Examples values with C2's types); rows whose code is the same share one `test.each`.
+- Mocks: `jest.mock()` for each mocked module (path inside the subject for internal modules); every test resets
+  its mocks and sets the C3-07 behaviour, so scenarios never share mock state. Globals (`Date.now`) use
+  `jest.spyOn`, restored after each test.
+- `c3/jest.config.cjs`: run from the run folder (`rootDir: '..'`), with the subject's `node_modules` on the module path.
+- `c3/test_manifest.json` (contract): every test with its exact Jest full name, Examples row, BV/EP refs,
+  strategy, assertion categories and mock decision ids. Verification fields are `skipped` until C3-11.
+
+The tests expect the subject at `<run folder>/<source.repo_path>` (default `subject-src`), like C4.
+`src/runner/jest.ts` runs them in a sandbox (the run's `c3/` + a copy of the subject, `node_modules` linked).
+On the golden example the 7 generated tests pass, every Jest full name equals its manifest name, and an
+off-by-one bug (`age > 64`) makes exactly the age-65 test fail.
+
 ### Model client (C3-06)
 
 All model calls go through one `ModelClient` (`src/model/`). Settings come only from `.env`
