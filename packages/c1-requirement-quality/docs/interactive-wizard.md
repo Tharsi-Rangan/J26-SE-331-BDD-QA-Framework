@@ -1,5 +1,67 @@
 # Stage 4E: beginner terminal wizard
 
+## M2: controlled publication and Refined SRS export
+
+The guided wizard now continues from an active M1 approval intent to an explicit
+publication confirmation. It also allows selecting the unchanged original for
+evidence-backed review when no rewrite is needed. Selection, approval intent
+and publication remain distinct actions. Every approved requirement must pass
+the existing independent quality, grounding, meaning, consistency, clarification
+and deterministic BDD checks. Human approval alone cannot grant readiness.
+
+Publication reuses the pending → prepared → completed session journal and the
+existing staging, evidence archiving and recovery services. The child workflow
+retains approval-intent digests and its exact pending-operation identity. The
+prepared event independently binds artifact, workflow, manifest and diagnostics.
+Snapshot loading reconstructs the approved result against the originating
+journal prefix and original parent-bound receipts. Candidate, policy, source,
+clarification, selection or peer-set changes fail closed. Ordinary refinement
+APIs still reject initial-RAG edits without this controlled session operation.
+
+Staging and copied inspection bundles cannot authorize readiness: public snapshot
+verification requires the journal-selected final location. Unprepared, cancelled,
+tampered or substituted children are rejected. Recovery adopts only a verified
+prepared child; it never regenerates approval or repeats inference. Evidence and
+the originating session journal must remain available. Local storage remains the
+trust anchor; this is not digital authentication against wholesale disk rewriting.
+Publication verification has a conservative depth limit of 32 nested operations.
+Repeated generations currently incur substantial verification cost; prefer a
+single batch of current approvals where possible. No checks are cached across
+calls to hide changed evidence or source bytes.
+
+Only current selected approvals are published in a batch. Other requirements keep
+their original obligations and remain unresolved or rejected. A later batch must
+obtain new parent-bound receipts and approvals; previous approvals are not silently
+reused against a new peer/workflow basis. The existing conservative generator may
+abstain and unresolved consistency coverage continues to block approval.
+
+From `packages/c1-requirement-quality` in PowerShell:
+
+```powershell
+# Start the existing wizard; import into a fresh isolated session.
+.\.venv\Scripts\python.exe -m c1_requirement_quality.cli
+
+# Use the session path displayed by the wizard.
+$session = Read-Host 'Isolated session directory'
+.\.venv\Scripts\python.exe -m c1_requirement_quality.cli demo --resume $session --wizard
+
+# Alternatively publish current verified approvals explicitly.
+.\.venv\Scripts\python.exe -m c1_requirement_quality.cli publish-approved --session $session --reviewer 'Reviewer' --confirm yes
+
+# Choose an export directory that does not yet exist.
+.\.venv\Scripts\python.exe -m c1_requirement_quality.cli export-refined --session $session --out "$session\exports\final-review"
+```
+
+The authorized C1 contract remains at
+`<session>/snapshots/<operation-id>/c1/validated_requirements.json`, alongside
+sealed internal workflow/source provenance and refinement diagnostics. No shared
+contract fields change. The export directory contains `refined_srs.docx`,
+`quality_report.json` and `quality_report.md`. Reports bind the authenticated
+artifact path/hash, retain IDs and original-to-final traceability, and distinguish
+unpublished review information from original-SRS evidence. Inspection exports of
+unpublished approval intents preserve original text and cannot grant readiness.
+The JSON quality report is not a substitute C1/C2 contract or a handoff token.
+
 ## M1: grounded review and approval intent
 
 Initial-RAG sessions support offline candidate generation, manual proposals,

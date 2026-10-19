@@ -150,6 +150,8 @@ def refinement_operation_binding(operation: dict[str, Any]) -> dict[str, Any]:
     """
     return {"version": 1, "operation_id": operation["operation_id"],
             "pending_sha256": operation["sha256"],
+            **({"approval_intent_sha256s": copy.deepcopy(operation["approval_intent_sha256s"])}
+               if "approval_intent_sha256s" in operation else {}),
             **{key: copy.deepcopy(operation[key]) for key in (
                 "parent_identity", "actions_sha256", "actions_parsed_sha256", "registry_anchor",
                 "evidence_candidate_ids", "evidence_links_sha256", "child_snapshot_id")}}
@@ -748,6 +750,7 @@ def load_state(input_path: Path, source: Path) -> tuple[dict[str, Any], dict[str
     from c1_requirement_quality.rag.candidate_validation import _canonical
     child: dict[str, Any] | None = None; result = None; first_manifest = None
     child_manifest = None
+    publications = []
     while True:
         if current in seen_paths: raise ValueError("Snapshot lineage cycle")
         if len(seen_paths) >= MAX_SNAPSHOT_ANCESTORS:
@@ -791,10 +794,14 @@ def load_state(input_path: Path, source: Path) -> tuple[dict[str, Any], dict[str
                 _reject_ancestry_reparse(checked)
         if descendant != ("initial_rag_ancestry" in state):
             raise ValueError("Initial RAG ancestry manifest/workflow mismatch")
-        if descendant and (state.get("parent") is None or any(
+        if "rag_publication" in state and not descendant:
+            raise ValueError("Publication proof requires verified initial RAG descendant ancestry")
+        if descendant and (state.get("parent") is None or ("rag_publication" not in state and any(
                 r.get("bdd_ready") or r.get("human_decision") in {"approved", "edited"}
-                for r in artifact["requirements"])):
+                for r in artifact["requirements"]))):
             raise ValueError("Initial RAG descendant authorization remains blocked")
+        if "rag_publication" in state:
+            publications.append((current, manifest, artifact, state))
         if manifest.get("rag_policy") and not descendant and state.get("parent") is not None:
             raise ValueError("Initial RAG descendant ancestry missing")
         if child is not None:
@@ -861,6 +868,9 @@ def load_state(input_path: Path, source: Path) -> tuple[dict[str, Any], dict[str
             record["original_snapshot_id"] = state["snapshot_id"]
         if record["original_snapshot_id"] != state["snapshot_id"]:
             raise ValueError("Original assessment snapshot reference does not match verified root")
+    for publication_path, publication_manifest, publication_artifact, publication_state in publications:
+        from c1_requirement_quality.rag.publication import verify_publication
+        verify_publication(publication_path, source, publication_manifest, publication_artifact, publication_state)
     return result, first_manifest
 
 

@@ -162,7 +162,8 @@ class DemoSession:
     def __init__(self, workspace: Path, *, _registry_anchor=None, analyser_factory=None):
         self.workspace = workspace.resolve()
         self._registry_anchor = _registry_anchor
-        self._analyser_factory = analyser_factory
+        from c1_requirement_quality.rag.publication import _factory
+        self._analyser_factory = analyser_factory or _factory.get()
         if _registry_anchor is not None:
             if (not isinstance(_registry_anchor, dict) or set(_registry_anchor) != {"sequence", "sha256"}
                     or type(_registry_anchor["sequence"]) is not int or _registry_anchor["sequence"] < 0
@@ -211,6 +212,7 @@ class DemoSession:
                             or event["artifact_sha256"] != self.prepared["commitment"]["artifact_sha256"]):
                         raise ValueError("Completed operation commitment mismatch")
                     self.current = Path(self.pending["out"]) / "c1/validated_requirements.json"
+                    self._review_state = None
                     if _hash(self.current.read_bytes()) != event["artifact_sha256"]:
                         raise ValueError("Published snapshot no longer matches receipt")
                 self.pending = None
@@ -247,6 +249,8 @@ class DemoSession:
         """Display-only draft overlay. Never a published or approvable C1 artifact."""
         data, text, manifest, state = self.read()
         if not manifest.get("rag_policy"):
+            return data, text, manifest, state
+        if self._review_state is None and state.get("rag_publication"):
             return data, text, manifest, state
         state = copy.deepcopy(self._review_state or state)
         data = copy.deepcopy(data)
@@ -572,7 +576,9 @@ class DemoSession:
         from c1_requirement_quality.contract import validate_contract_artifact as _validate_contract_artifact
         if _hash(self.source.read_bytes()) != self.meta["source_sha256"]:
             raise ValueError("Session SRS changed")
-        text, manifest, data, state = _verify_snapshot(self.current, self.source)
+        from c1_requirement_quality.rag.publication import publication_models
+        with publication_models(self._analyser_factory):
+            text, manifest, data, state = _verify_snapshot(self.current, self.source)
         _validate_contract_artifact(data)
         if self.meta.get("mandatory_rag") and manifest.get("rag_policy") != "c1-initial-rag-v1":
             raise ValueError("Mandatory RAG grounding receipt missing")
@@ -586,6 +592,11 @@ class DemoSession:
         return data, text, manifest, state
 
     def _check_child(self, operation):
+        from c1_requirement_quality.rag.publication import publication_models
+        with publication_models(self._analyser_factory):
+            return self._check_child_verified(operation)
+
+    def _check_child_verified(self, operation):
         matches = [event for event in _verified_journal(self.workspace, self._registry_anchor)
                    if event["kind"] == "pending" and event.get("operation_id") == operation.get("operation_id")]
         if len(matches) != 1 or matches[0] != operation:
@@ -626,7 +637,11 @@ class DemoSession:
                 analyser_factory=self._analyser_factory)
             if prefix.pending != operation or prefix.prepared != self.prepared:
                 raise ValueError("Recovery operation is not independently journal-bound")
-            require_refinement_grounding(parent_manifest)
+            if operation.get("approval_intent_sha256s"):
+                from c1_requirement_quality.rag.publication import authorize_operation
+                authorize_operation(operation, self.source, analyser_factory=self._analyser_factory)
+            else:
+                require_refinement_grounding(parent_manifest)
             commitment = prefix.prepared["commitment"]
             expected = {"version": 1, "snapshot_id": state["snapshot_id"],
                 "artifact_sha256": _hash(child_raw), "workflow_sha256": manifest["workflow_sha256"],
@@ -677,7 +692,8 @@ class DemoSession:
             state = self._check_child(operation)
             child = Path(operation["out"]) / "c1/validated_requirements.json"
             from c1_requirement_quality.source_integrity import require_refinement_grounding
-            require_refinement_grounding(verify_source(Path(operation["parent"]), self.source)[1])
+            if not operation.get("approval_intent_sha256s"):
+                require_refinement_grounding(verify_source(Path(operation["parent"]), self.source)[1])
             if operation.get("operation_version") != 2 and (
                     "parent_evidence_links" in state or (child.parent / "candidate_evidence").exists()):
                 raise ValueError("Evidence-linked recovery requires operation-bound staging; adoption blocked")
@@ -686,6 +702,7 @@ class DemoSession:
                       else {"artifact_sha256": _hash(child.read_bytes())})
             self._append("completed", operation_id=operation["operation_id"], **values)
             self.current = child
+            self._review_state = None
         else:
             self._append("cancelled", operation_id=operation["operation_id"], note="Human declined replay/adoption; files retained")
         self.pending = None
@@ -693,7 +710,8 @@ class DemoSession:
 
     def apply(self, action: dict[str, Any] | list[dict[str, Any]], reviewer: str, confirmed: bool,
               *, consistency_reviews: list[dict[str, Any]] | None = None,
-              evidence_candidate_ids: list[str] | None = None, analyser_factory=None) -> None:
+              evidence_candidate_ids: list[str] | None = None, analyser_factory=None,
+              _approval_intent_sha256s=None) -> None:
         from c1_requirement_quality.cli import refine_run
         if not confirmed or not isinstance(reviewer, str) or not reviewer.strip():
             raise ValueError("Explicit confirmation and reviewer identity are required")
@@ -701,7 +719,21 @@ class DemoSession:
             raise ValueError("Resolve pending operation before another action")
         _, _, manifest, state = self.read()
         from c1_requirement_quality.source_integrity import require_refinement_grounding
-        require_refinement_grounding(manifest)
+        if not _approval_intent_sha256s:
+            require_refinement_grounding(manifest)
+        else:
+            from c1_requirement_quality.rag.publication import active_intents
+            fresh = DemoSession(self.workspace, analyser_factory=analyser_factory or self._analyser_factory)
+            available = {e["sha256"]: e for e in active_intents(fresh)}
+            if (manifest.get("rag_policy") != "c1-initial-rag-v1" or consistency_reviews is not None
+                    or len(set(_approval_intent_sha256s)) != len(_approval_intent_sha256s)
+                    or not set(_approval_intent_sha256s) <= available.keys()):
+                raise ValueError("Missing or stale publication approval intents")
+            intended = [available[key] for key in _approval_intent_sha256s]
+            supplied = action if isinstance(action, list) else [action]
+            if (supplied != [e["action"] for e in intended]
+                    or evidence_candidate_ids != [e["eligibility"]["candidate_id"] for e in intended]):
+                raise ValueError("Publication action differs from approved intent")
         if self._registry_anchor is not None:
             raise ValueError("Registry journal prefix is read-only")
         if analyser_factory is not None:
@@ -716,7 +748,9 @@ class DemoSession:
         token = uuid.uuid4().hex
         actions = self.workspace / "actions" / f"{token}.json"
         actions_list = action if isinstance(action, list) else [action]
-        payload = {"requirements": [{**copy.deepcopy(item), "actor_id": reviewer.strip()} for item in actions_list]}
+        payload = {"requirements": [{**copy.deepcopy(item), "actor_id":
+            intended[index]["reviewer"] if _approval_intent_sha256s else reviewer.strip()}
+            for index, item in enumerate(actions_list)]}
         if consistency_reviews is not None:
             payload["consistency_reviews"] = copy.deepcopy(consistency_reviews)
         actions_raw = json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False).encode("utf-8")
@@ -727,7 +761,8 @@ class DemoSession:
             parent_identity=_candidate_snapshot_identity(manifest, state), actions=str(actions),
             actions_sha256=_hash(actions_raw), actions_parsed_sha256=_hash(_canonical(payload)), out=str(out),
             registry_anchor=anchor, evidence_candidate_ids=ids, evidence_links_sha256=_hash(_canonical(links)),
-            child_snapshot_id="SNAPSHOT-" + token)
+            child_snapshot_id="SNAPSHOT-" + token,
+            **({"approval_intent_sha256s": copy.deepcopy(_approval_intent_sha256s)} if _approval_intent_sha256s else {}))
         self.pending = self.events[-1]
         self.prepared = None
         def prepared(commitment):
@@ -735,10 +770,33 @@ class DemoSession:
                          commitment=commitment)
             self.prepared = self.events[-1]
             return self.prepared
-        refine_run(self.current, self.source, actions, out,
-            evidence_registry=self.workspace if ids else None, evidence_candidate_ids=ids if ids else None,
-            analyser_factory=self._analyser_factory, _operation=self.pending, _prepared=prepared)
+        from c1_requirement_quality.rag.publication import publication_models
+        with publication_models(self._analyser_factory):
+            refine_run(self.current, self.source, actions, out,
+                evidence_registry=self.workspace if ids else None, evidence_candidate_ids=ids if ids else None,
+                analyser_factory=self._analyser_factory, _operation=self.pending, _prepared=prepared)
         self.recover(True)
+
+    def publish_approved(self, reviewer: str, confirmed: bool, *, requirement_ids=None):
+        """Publish only active, journal-verified M1 approvals; no inference."""
+        from c1_requirement_quality.rag.publication import active_intents
+        if confirmed is not True:
+            raise ValueError("Explicit publication confirmation required")
+        fresh = DemoSession(self.workspace, analyser_factory=self._analyser_factory)
+        intents = active_intents(fresh)
+        if requirement_ids is not None:
+            if (not isinstance(requirement_ids, list) or not requirement_ids
+                    or len(set(requirement_ids)) != len(requirement_ids)):
+                raise ValueError("Unique publication requirement IDs required")
+            intents = [e for e in intents if e["action"]["requirement_id"] in requirement_ids]
+            if {e["action"]["requirement_id"] for e in intents} != set(requirement_ids):
+                raise ValueError("Selected requirement has no current approved intent")
+        if not intents:
+            raise ValueError("No current approved intents to publish")
+        self.__dict__.update(fresh.__dict__)
+        self.apply([e["action"] for e in intents], reviewer, confirmed,
+            evidence_candidate_ids=[e["eligibility"]["candidate_id"] for e in intents],
+            _approval_intent_sha256s=[e["sha256"] for e in intents])
 
     def review_receipt(self, sidecar: Path, accepted: bool, item: str) -> None:
         self._append("review", artifact_sha256=_hash(self.current.read_bytes()), sidecar=str(sidecar.resolve()),

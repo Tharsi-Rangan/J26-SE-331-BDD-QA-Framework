@@ -752,7 +752,7 @@ class Wizard:
                     session.review_action(action, reviewer, True)
                 else:
                     session.apply(action, reviewer, True)
-            self.tell("Approval intent recorded; publication and BDD readiness remain blocked."
+            self.tell("Approval intent recorded; publication and BDD readiness remain blocked until controlled publication."
                       if rag and action.get("human_decision") == "approved" else
                       "Saved and rechecked. Answering or selecting does not approve a requirement.")
             return True
@@ -815,7 +815,7 @@ class Wizard:
                              "Existing sessions are preserved; technical information is available in Details.") from error
         self.display("Analysis complete. Verified session ready for human review.", "green")
         if session.meta.get("mandatory_rag"):
-            self.display("Initial RAG analysis is available for grounded candidate review, clarification and approval intent. Final publication and BDD readiness remain blocked.", "yellow")
+            self.display("Initial RAG analysis is available for grounded candidate review, clarification and approval intent. Publication requires independent verification of an active approval intent.", "yellow")
         return session
 
     def choose_session(self):
@@ -1417,6 +1417,9 @@ class Wizard:
             self.tell("Eligibility: " + str(result["evaluation"]["candidate_eligible"]) + "; no approval or publication implied.")
             self.tell("Candidate checks: " + str(result["validation"]["checks"]))
             self.tell("Tier assessment: " + result["tier"]["tier"])
+            self.tell("Source SRS: " + session.source.name)
+            for evidence in result["evaluation"]["grounding"].get("evidence", []):
+                self.tell("Evidence " + str(evidence.get("chunk_id", "")) + ": " + str(evidence.get("text", "")))
             return
         self.tell("\n" + "=" * 70)
         self.tell("Verify Candidate against SRS Evidence (Local DeBERTa NLI)")
@@ -1753,10 +1756,13 @@ class Wizard:
                 if candidate:
                     self.verify_candidate_evidence(session, row["requirement_id"], candidate)
                     self.tell("Exact selected candidate for approval intent: " + candidate["text"])
-                self.tell("This records review intent only. Final publication and BDD readiness remain blocked.")
-                options = (["Approve selected candidate", "Reject selected candidate"] if candidate else []) + ["Request clarification", "Back"]
+                self.tell("This records review intent only. Final publication and BDD readiness remain blocked until controlled publication.")
+                options = (["Approve selected candidate", "Reject selected candidate"] if candidate else ["Review original without rewriting"]) + ["Request clarification", "Back"]
                 selected = options[self.menu("Human decision", options) - 1]
                 if selected == "Back":
+                    return
+                if selected == "Review original without rewriting":
+                    self.publish(session, {"requirement_id": row["requirement_id"], "selected_candidate_text": row["original_text"]})
                     return
                 if selected == "Request clarification":
                     question = self.ask("Clarification question (blank cancels): ").strip()
@@ -1985,7 +1991,7 @@ class Wizard:
             action = self.next_action(session, row, state)
             labels = {"questions": "Answer unresolved clarification questions", "consistency": "Review unresolved consistency comparisons",
                       "manual": "Write a manual rewrite", "candidates": "Review safe suggestions / registered candidates",
-                      "intent_recorded": "Continue (approval intent recorded; publication blocked)",
+                      "intent_recorded": "Publish verified approved refinement",
                       "approval": "Review selected candidate and explicitly approve", "complete": "Continue (already BDD-ready)"}
             if action == "manual" and state["requirements"][rid]["escalation_active"]:
                 self.tell("Escalation reasons: " + "; ".join(c["explanation"] for c in row["consistency"].get("conflicts", [])))
@@ -2005,11 +2011,11 @@ class Wizard:
             elif choice == 3:
                 index = max(0, index - 1)
                 continue
-            elif choice == 2 or action in {"complete", "intent_recorded"}:
+            elif choice == 2 or action == "complete":
                 index += 1
                 continue
             else:
-                {"questions": self.questions, "consistency": self.consistency, "manual": self.manual,
+                {"intent_recorded": self.publish_approved, "questions": self.questions, "consistency": self.consistency, "manual": self.manual,
                  "candidates": self.candidates, "approval": self.approval}[action](session, rid)
             if session.pending: return  # Resolve interruptions in the session recovery screen.
             self.tell("Step 3 - Reclassification from the current verified snapshot")
@@ -2033,8 +2039,20 @@ class Wizard:
             md_path, txt_path = self.export_reports(session, out_dir=out_dir)
             self.tell(f"Exported Markdown report: {md_path}")
             self.tell(f"Exported Quality summary: {txt_path}")
+            if session.read()[2].get("rag_policy"):
+                from .refined_export import export_refined_srs
+                target = Path(out_dir) / ("refined-" + uuid.uuid4().hex) if out_dir else session.workspace / "exports" / uuid.uuid4().hex
+                for name, path in export_refined_srs(session, target).items():
+                    self.tell(f"Exported {name}: {path}")
         except (OSError, RuntimeError) as error:
             self.tell(f"Unable to export reports: {error}. JSON output and session data are safely retained.")
+
+    def publish_approved(self, session, requirement_id=None):
+        self.tell("Publication independently rechecks source, evidence, approval and final readiness conditions.")
+        reviewer = self.ask("Publisher/reviewer label (blank cancels): ").strip()
+        if reviewer and self.ask("Publish approved refinement? Type yes: ").strip().lower() == "yes":
+            session.publish_approved(reviewer, True, requirement_ids=[requirement_id] if requirement_id else None)
+            self.tell("Published verified refinement: " + str(session.current))
 
     def review(self, session, *, start_guided=False):
         with _session_lock(session.workspace):

@@ -49,6 +49,15 @@ def build_parser() -> argparse.ArgumentParser:
     demo_parser.add_argument("--registry")
     demo_parser.add_argument("--project-code", default="EX")
     demo_parser.add_argument("--document-id")
+    demo_parser.add_argument("--wizard", action="store_true", help="resume the complete numbered wizard")
+    publish_parser = sub.add_parser("publish-approved", help="publish current journal-backed approval intents")
+    publish_parser.add_argument("--session", required=True)
+    publish_parser.add_argument("--reviewer", required=True)
+    publish_parser.add_argument("--confirm", required=True, choices=("yes",))
+    publish_parser.add_argument("--requirement-id", action="append")
+    export_parser = sub.add_parser("export-refined", help="export authenticated Refined SRS DOCX and quality reports")
+    export_parser.add_argument("--session", required=True)
+    export_parser.add_argument("--out", required=True, help="fresh export directory")
     run_parser = sub.add_parser(
         "run",
         help="parse an SRS into C1 requirements",
@@ -165,7 +174,10 @@ def refine_run(input_path: Path, srs: Path, actions_path: Path, out: Path, *,
     if sha256(artifact_raw) != manifest["artifact_sha256"]:
         raise ValueError("Refinement parent artifact digest mismatch")
     from c1_requirement_quality.source_integrity import require_refinement_grounding
-    require_refinement_grounding(manifest)
+    rag_publication = bool(manifest.get("rag_policy") and _operation is not None
+                           and _operation.get("approval_intent_sha256s"))
+    if not rag_publication:
+        require_refinement_grounding(manifest)
     parent_state, _ = load_state(input_path, srs)
     registry_anchor = None
     if _operation is not None:
@@ -189,17 +201,22 @@ def refine_run(input_path: Path, srs: Path, actions_path: Path, out: Path, *,
         registry_anchor = operation["registry_anchor"]
         if registry_anchor != {"sequence": operation["sequence"] - 1, "sha256": operation["previous"]}:
             raise ValueError("Refinement registry cutoff must precede the pending operation")
-    refined, diagnostics, workflow_state = refine_with_history(
-        artifact, actions, srs_text, parent_state, input_path, out / "c1", manifest,
-        snapshot_id=_operation["child_snapshot_id"] if _operation is not None else None,
-    )
+    if rag_publication:
+        from c1_requirement_quality.rag.publication import materialize
+        refined, diagnostics, workflow_state, _ = materialize(_operation, srs, analyser_factory=analyser_factory)
+    else:
+        refined, diagnostics, workflow_state = refine_with_history(
+            artifact, actions, srs_text, parent_state, input_path, out / "c1", manifest,
+            snapshot_id=_operation["child_snapshot_id"] if _operation is not None else None,
+        )
     if _operation is not None:
         from c1_requirement_quality.workflow_persistence import refinement_operation_binding
         workflow_state["operation_binding"] = refinement_operation_binding(_operation)
     _validate_contract_artifact(refined)
     if evidence_registry is not None:
         selected = {row["selected_candidate_id"] for row in refined["requirements"]
-                    if row.get("selected_candidate_id") is not None}
+                    if row.get("selected_candidate_id") is not None
+                    and (not rag_publication or row["human_decision"] == "approved")}
         if not isinstance(evidence_candidate_ids, list) or not selected <= set(evidence_candidate_ids):
             raise ValueError("Selected candidate lacks selected parent evidence")
 
@@ -223,11 +240,28 @@ def refine_run(input_path: Path, srs: Path, actions_path: Path, out: Path, *,
     expected_workflow = (json.dumps(expected_state, indent=2, ensure_ascii=False) + "\n").replace("\n", os.linesep).encode("utf-8")
     expected_manifest = dict(manifest, artifact_sha256=sha256(child_raw),
                              workflow_sha256=sha256(expected_workflow))
-    _, _, staged_manifest, staged_state = resolve_workflow_policy(
-        VerifiedWorkflowContext(c1_dir / "validated_requirements.json", srs))
+    prepared_event = None
+    if rag_publication:
+        expected_manifest["rag_ancestry_version"] = 1
+        commitment = {"version": 1, "snapshot_id": expected_state["snapshot_id"],
+            "artifact_sha256": sha256(child_raw), "workflow_sha256": sha256(expected_workflow),
+            "manifest_sha256": sha256(_canonical(expected_manifest)), "diagnostics_sha256": sha256(diagnostics_raw)}
+        prepared_event = _prepared(commitment)
+        from c1_requirement_quality.source_integrity import _verify_source_local
+        from c1_requirement_quality.rag.publication import verify_publication
+        _, staged_manifest, staged_artifact = _verify_source_local(c1_dir / "validated_requirements.json", srs)
+        verified_workflow = (c1_dir / "internal/workflow_snapshot.json").read_bytes()
+        if sha256(verified_workflow) != staged_manifest["workflow_sha256"]:
+            raise ValueError("Staged workflow digest mismatch")
+        staged_state = json.loads(verified_workflow)
+        verify_publication(c1_dir / "validated_requirements.json", srs, staged_manifest,
+                           staged_artifact, staged_state, staging=True)
+    else:
+        _, _, staged_manifest, staged_state = resolve_workflow_policy(
+            VerifiedWorkflowContext(c1_dir / "validated_requirements.json", srs))
     if staged_manifest != expected_manifest or staged_state != expected_state:
         raise ValueError("Staged child differs from the prepared refinement")
-    if evidence_registry is not None:
+    if evidence_registry is not None and not rag_publication:
         from c1_requirement_quality.workflow_persistence import verify_child_evidence_links
         verify_child_evidence_links(c1_dir / "validated_requirements.json", srs,
             registry_workspace=evidence_registry, analyser_factory=analyser_factory, registry_anchor=registry_anchor)
@@ -242,22 +276,32 @@ def refine_run(input_path: Path, srs: Path, actions_path: Path, out: Path, *,
             "artifact_sha256": sha256(child_raw), "workflow_sha256": sha256(expected_workflow),
             "manifest_sha256": sha256(_canonical(expected_manifest)),
             "diagnostics_sha256": sha256(diagnostics_raw)}
-        prepared_event = _prepared(commitment)
+        if prepared_event is None:
+            prepared_event = _prepared(commitment)
         proof = DemoSession(Path(_operation["workspace"]), _registry_anchor={
             "sequence": prepared_event["sequence"], "sha256": prepared_event["sha256"]},
             analyser_factory=analyser_factory)
         if (proof.pending != _operation or proof.prepared != prepared_event
                 or proof.prepared["commitment"] != commitment):
             raise ValueError("Prepared child commitment is not journal-bound")
-        _, _, final_manifest, final_state = resolve_workflow_policy(
-            VerifiedWorkflowContext(c1_dir / "validated_requirements.json", srs))
+        if rag_publication:
+            _, final_manifest, staged_artifact = _verify_source_local(c1_dir / "validated_requirements.json", srs)
+            verified_workflow = (c1_dir / "internal/workflow_snapshot.json").read_bytes()
+            if sha256(verified_workflow) != final_manifest["workflow_sha256"]:
+                raise ValueError("Prepared workflow digest mismatch")
+            final_state = json.loads(verified_workflow)
+            verify_publication(c1_dir / "validated_requirements.json", srs, final_manifest,
+                               staged_artifact, final_state, staging=True)
+        else:
+            _, _, final_manifest, final_state = resolve_workflow_policy(
+                VerifiedWorkflowContext(c1_dir / "validated_requirements.json", srs))
         if (final_manifest != expected_manifest or final_state != expected_state
                 or sha256((c1_dir / "validated_requirements.json").read_bytes()) != commitment["artifact_sha256"]
                 or sha256((c1_dir / "internal/workflow_snapshot.json").read_bytes()) != commitment["workflow_sha256"]
                 or sha256((c1_dir / "refinement_diagnostics.json").read_bytes()) != commitment["diagnostics_sha256"]
                 or actions_path.read_bytes() != actions_raw):
             raise ValueError("Prepared staging changed before publication")
-        if evidence_registry is not None:
+        if evidence_registry is not None and not rag_publication:
             verify_child_evidence_links(c1_dir / "validated_requirements.json", srs,
                 registry_workspace=evidence_registry, analyser_factory=analyser_factory,
                 registry_anchor=registry_anchor)
@@ -635,11 +679,31 @@ def main(argv: list[str] | None = None) -> int:
             from c1_requirement_quality.demo_workflow import guided_demo
             if args.resume and any((args.input_path, args.srs, args.run_id, args.registry, args.document_id)):
                 raise ValueError("Resume uses saved session inputs; do not supply new run arguments")
+            if args.wizard:
+                if not args.resume:
+                    raise ValueError("--wizard requires --resume")
+                from c1_requirement_quality.demo_workflow import DemoSession
+                from c1_requirement_quality.wizard import Wizard
+                Wizard(Path(args.resume).parent).review(DemoSession(Path(args.resume)), start_guided=True)
+                return 0
             guided_demo(Path(args.resume or args.workspace), resume=bool(args.resume),
                         artifact=Path(args.input_path) if args.input_path else None,
                         source=Path(args.srs) if args.srs else None, run_id=args.run_id,
                         registry=Path(args.registry) if args.registry else None,
                         project_code=args.project_code, document_id=args.document_id)
+            return 0
+        if args.command in {"publish-approved", "export-refined"}:
+            from c1_requirement_quality.demo_workflow import DemoSession, _session_lock
+            workspace = Path(args.session)
+            with _session_lock(workspace):
+                session = DemoSession(workspace)
+                if args.command == "publish-approved":
+                    session.publish_approved(args.reviewer, args.confirm == "yes", requirement_ids=args.requirement_id)
+                    print(f"[c1] authorized C1 output: {session.current}")
+                else:
+                    from c1_requirement_quality.refined_export import export_refined_srs
+                    for name, path in export_refined_srs(session, Path(args.out)).items():
+                        print(f"[c1] {name}: {path}")
             return 0
         if args.command == "propose-clarifications":
             from c1_requirement_quality.clarification_proposals import propose_clarifications_run
