@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { parseRunArgs } from '../src/args.js';
+import { parseRunArgs, parseScanArgs } from '../src/args.js';
 
 describe('c3 parseRunArgs', () => {
   test('reads the run command options', () => {
@@ -17,5 +17,33 @@ describe('c3 parseRunArgs', () => {
 
   test('rejects a missing --out', () => {
     expect(() => parseRunArgs(['run'])).toThrow(/--out/);
+  });
+});
+
+describe('c3 parseScanArgs', () => {
+  test('reads the scan command options', () => {
+    const base = path.resolve('repo-root');
+    const opts = parseScanArgs(
+      [
+        'scan',
+        '--subject-root',
+        'subjects/express',
+        '--module',
+        'lib/utils.js',
+        '--exports',
+        'isAbsolute, etag',
+      ],
+      base,
+    );
+    expect(opts).toEqual({
+      subjectRoot: path.join(base, 'subjects', 'express'),
+      module: 'lib/utils.js',
+      exports: ['isAbsolute', 'etag'],
+      out: undefined,
+    });
+  });
+
+  test('rejects a scan without --module', () => {
+    expect(() => parseScanArgs(['scan', '--subject-root', 'x'])).toThrow(/Usage: c3 scan/);
   });
 });

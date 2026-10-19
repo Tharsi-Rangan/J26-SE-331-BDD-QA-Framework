@@ -11,6 +11,22 @@ pnpm c3 run --in runs/<RUN-ID> --subject-root <path> --out runs/<RUN-ID>
 During PP1, use a golden fixture folder as `--in`, for example
 `packages/contracts/fixtures/golden/example-registration`.
 
+`run` also scans each subject module (C3-04) and writes `<out>/c3/work/dependency_scan.json`
+(an internal file, not a contract). The subject folder is `--subject-root`, or the manifest's
+`source.repo_path` inside `--in` for golden fixtures.
+
+### Dependency scan only (C3-04)
+
+```
+pnpm c3 scan --subject-root <checked-out subject> --module lib/utils.js [--exports a,b] [--out scan.json]
+```
+
+Lists the module's imports, what it really uses from each (plus globals such as `Date`,
+`Math.random`, `process`, timers), which dependencies each export reaches (also through local
+helpers), what runs as soon as the module is required, and a side-effect guess (`io`, `network`,
+`time`, `random`, `database`, `none`, `unknown`) from known names. Kinds and side effects match `dependency.kind` and `dependency.side_effect` in
+`c3-mock-decisions.schema.json`.
+
 ## Develop
 
 ```
