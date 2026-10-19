@@ -131,6 +131,19 @@ describe('C3-05 which export a scenario tests', () => {
     ).toEqual(['loadConfig']);
   });
 
+  test('C3-14 pilot: one export with the most name words wins; a tie keeps all', () => {
+    const all = ['isAbsolute', 'saveUser', 'pickId'];
+    const sc = scenario('Trust a number of hops', 'hop 0 is checked', all);
+    // "user" is in the Given step -> saveUser is the only export with a matching word
+    const t = chooseTargetExports(sc, scan);
+    expect(t.exports).toEqual(['saveUser']);
+    expect(t.basis).toMatch(/partly named .*\(user\)/);
+    // a tie (two exports with one word each) is not guessed: all exports stay in scope
+    const tie = scenario('x', 'pick the config', ['loadConfig', 'pickId']);
+    tie.steps[0] = { keyword: 'Given', text: 'nothing else', line: 4 };
+    expect(chooseTargetExports(tie, scan).exports).toEqual(['loadConfig', 'pickId']);
+  });
+
   test('nothing named -> every export in scope (none are missed)', () => {
     const t = chooseTargetExports(
       scenario('x', 'something happens', ['isAbsolute', 'pickId']),

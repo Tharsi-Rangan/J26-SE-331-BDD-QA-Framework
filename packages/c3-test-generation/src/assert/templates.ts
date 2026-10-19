@@ -1,5 +1,5 @@
 // C3-08 fixed templates: typed assertion slots -> Jest code. The model never writes these lines.
-//   equality     expect(<actual>).toBe(<expected>)  (toEqual for objects/arrays/row values; toBeFalsy for false, toBeNull for null)
+//   equality     expect(<actual>).toBe(<expected>)  (toEqual for objects/arrays/row values; toBeFalsy for false, (x ?? null).toBeNull for null)
 //   exception    expect(() => <act>).toThrow(<Error>)   (async: await expect(<act>).rejects.toThrow(...))
 //   state_change expect(<mock>).toHaveBeenCalledWith(...) / .toHaveBeenCalled() / .not.toHaveBeenCalled() / .toHaveBeenCalledTimes(n)
 //   range        expect(<actual>).toBeGreaterThanOrEqual(<min>); expect(<actual>).toBeLessThanOrEqual(<max>)
@@ -10,12 +10,14 @@ import type { AssertionSlot, PlanCase, ScenarioPlan } from './plan.js';
 export const TEMPLATE_NOTES = {
   falsy:
     'expected false -> toBeFalsy(): JavaScript predicates often return undefined for "no", which the requirement also means.',
+  nullish:
+    'expected null -> expect(x ?? null).toBeNull(): JSON has no undefined, so null from the model means "no value"; a JS function that returns nothing gives undefined (C3-14 pilot, compileETag(false)).',
 };
 
 function equality(a: AssertionSlot, params: ReadonlyMap<string, string>): string {
   const actual = a.actual ?? 'result';
   if (a.expected === false) return `expect(${actual}).toBeFalsy();`;
-  if (a.expected === null) return `expect(${actual}).toBeNull();`;
+  if (a.expected === null) return `expect(${actual} ?? null).toBeNull();`;
   const exp = renderValue(a.expected, params);
   return isPrimitiveLiteral(exp)
     ? `expect(${actual}).toBe(${exp});`

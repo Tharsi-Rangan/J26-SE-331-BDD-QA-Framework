@@ -106,13 +106,14 @@ Fixed templates (`src/assert/templates.ts`):
 
 | Category       | Jest code                                                                                                   |
 | -------------- | ----------------------------------------------------------------------------------------------------------- |
-| `equality`     | `expect(actual).toBe(x)` (literals), `toEqual(x)` (objects, arrays, row values), `toBeFalsy()` for `false`, `toBeNull()` for `null` |
+| `equality`     | `expect(actual).toBe(x)` (literals), `toEqual(x)` (objects, arrays, row values), `toBeFalsy()` for `false`, `expect(actual ?? null).toBeNull()` for `null` |
 | `exception`    | `expect(() => act).toThrow(Error)`; async: `await expect(act).rejects.toThrow(Error)`                       |
 | `state_change` | `expect(mock).toHaveBeenCalledWith(...)`, `.toHaveBeenCalled()`, `.not.toHaveBeenCalled()`, `.toHaveBeenCalledTimes(n)` |
 | `range`        | `expect(actual).toBeGreaterThanOrEqual(min)` / `toBeLessThanOrEqual(max)` (or the strict forms)              |
 
 `false` uses `toBeFalsy()` because JavaScript predicates often return `undefined` for "no", which the
-requirement also means.
+requirement also means. `null` means "no value" (JSON has no `undefined`), so it accepts `null` and
+`undefined`: a function that returns nothing gives `undefined` (found in the C3-14 pilot: `compileETag(false)`).
 
 A rule-based category guess (keywords such as *error/rejected* -> exception, *between/at least* -> range,
 *saved/sent/called* -> state_change, else equality) is kept for every (row, Then step), and
@@ -208,6 +209,50 @@ A clean test scores 0.7 + 0.3 x semantic, so it needs semantic >= 0.34 to run; a
 
 A runnable scenario whose tests fail on the given subject says so in its reason ("possible bug found; check
 on the fixed version"). Stubs never run (`jest.config.cjs` only looks in `c3/runnable_tests`).
+
+### Pilot: buggy vs fixed (C3-14)
+
+```
+pnpm c3 pilot --run runs/<RUN-ID> --buggy <subject root> --fixed <subject root> --label Express-5
+```
+
+Tests are generated **once, on the buggy version** (`c3 run --subject-root <buggy>`), as in real use
+where the fix is not known. `c3 pilot` then runs the **same** test files on both versions:
+
+| Outcome | Meaning |
+|---|---|
+| `bug_detected` | fails on buggy, passes on fixed |
+| `false_alarm` | fails on fixed (the fixed code is taken as correct) |
+| `no_signal` | passes on both: the test does not reach this bug |
+
+It writes `c3/work/pilot_results.json` and `c3/work/pilot_results.md` (scenarios, runnable %, tests,
+bugs detected, false alarms, stubs).
+
+Control subject: `fixtures/pilot/example-off-by-one/` is the golden example with a planted off-by-one
+bug (`age > 64`). It is not a BugsJS bug; it shows what a detected bug looks like in the table.
+
+Fixes found while preparing the Express-5 pilot (`lib/utils.js`, 6 exports):
+
+- **Target export (C3-05):** when no export is fully named in the scenario, the one export with the
+  most name words in the scenario or feature text is used ("Trust a number of hops" -> `compileTrust`).
+  Generic words (`is`, `set`, `compile`, ...) do not count; a tie keeps all exports in scope.
+- **Returned functions (C3-08):** an act may call the function an export returns, e.g.
+  `compileTrust(2)("10.0.0.1", 0)`; its callee is still `compileTrust`. Prompt version 0.4.0.
+- **`null` expected (C3-08 template):** `expect(x ?? null).toBeNull()`, because a JS function that
+  returns nothing gives `undefined` (`compileETag(false)`).
+
+Fix-3, from the first real Qwen run on Express-5 (run 1: 15 tests, 0 bugs found, 10 false alarms that
+also fail on the fixed code). Three causes, each now handled for every subject:
+
+| Cause in run 1 | Tests | Fix (prompt version 0.5.0) |
+|---|---|---|
+| Quote marks copied into the value: `toBe("\"text/html\"")` | 3 | A string that is a step value wrapped in quotes is unwrapped (`unquoteValue`) |
+| A Given/When value missing from the act: `compileTrust(<hop>)` for "the trust setting 2" | 2 | Rule 7 + check: every Given/When value must appear in the act, else the answer is retried with the reason (`unusedStepValues`) |
+| Result shape guessed: `result.type`, `result.q`; a returned function compared to `true` | 6 | Rule 8 + check: `actual` may only use field names from the Then steps (or `length`/`size`) (`inventedResultFields`); the export's **JSDoc** (description, `@param`, `@return`) is shown to the model as the documented interface, never its code |
+
+When the requirement does not say what shape the result has, C3 takes the shape from the documented
+interface. If there is no documentation either, the answer cannot pass the checks and the scenario is a stub
+with the reason, never a guessed test.
 
 ### Model client (C3-06)
 

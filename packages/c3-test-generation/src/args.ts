@@ -83,6 +83,38 @@ export function parseScanArgs(argv: string[], baseDir = callerDir()): ScanComman
   };
 }
 
+export interface PilotCommandOptions {
+  run: string;
+  buggy: string;
+  fixed: string;
+  label?: string;
+}
+
+/** Parse `c3 pilot --run runs/<RUN-ID> --buggy <subject root> --fixed <subject root> [--label Express-5]`. */
+export function parsePilotArgs(argv: string[], baseDir = callerDir()): PilotCommandOptions {
+  const { positionals, values } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: {
+      run: { type: 'string' },
+      buggy: { type: 'string' },
+      fixed: { type: 'string' },
+      label: { type: 'string' },
+    },
+  });
+  if (positionals[0] !== 'pilot' || !values.run || !values.buggy || !values.fixed) {
+    throw new Error(
+      'Usage: c3 pilot --run runs/<RUN-ID> --buggy <subject root> --fixed <subject root> [--label <name>]',
+    );
+  }
+  return {
+    run: path.resolve(baseDir, values.run),
+    buggy: path.resolve(baseDir, values.buggy),
+    fixed: path.resolve(baseDir, values.fixed),
+    ...(values.label ? { label: values.label } : {}),
+  };
+}
+
 /**
  * Folder the user ran the command from. pnpm runs scripts inside the package folder,
  * but sets INIT_CWD to the original folder, so relative paths work from the repo root.

@@ -155,7 +155,8 @@ export function checkExpression(code: string, allowed: ReadonlySet<string>): Exp
   if (ts.isCallExpression(inner) || ts.isNewExpression(inner)) {
     let c: ts.Expression = inner.expression;
     calleeText = c.getText(sf);
-    while (ts.isPropertyAccessExpression(c)) c = c.expression;
+    // compileTrust(2)("10.0.0.1", 0): the call of a returned function still has compileTrust as its root.
+    while (ts.isPropertyAccessExpression(c) || ts.isCallExpression(c)) c = c.expression;
     if (ts.isIdentifier(c)) callee = c.text;
   }
   return { ok: problems.length === 0, problems, identifiers, callee, calleeText };

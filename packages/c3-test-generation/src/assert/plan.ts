@@ -21,7 +21,7 @@ import {
   replacePlaceholders,
 } from './expr.js';
 
-export const ASSERTION_PROMPT_VERSION = '0.3.0';
+export const ASSERTION_PROMPT_VERSION = '0.5.0';
 export const ASSERTION_CATEGORIES = ['equality', 'exception', 'state_change', 'range'] as const;
 export type AssertionCategory = (typeof ASSERTION_CATEGORIES)[number];
 export const STATE_CHANGES = ['called_with', 'called', 'not_called', 'called_times'] as const;
@@ -228,6 +228,10 @@ export function assertionPrompt(ctx: PlanContext): { system: string; user: strin
     `Scenario: ${sc.scenarioName} (type: ${sc.scenarioType})`,
     `Module under test: ${sc.subject.modulePath}`,
     `Function under test: ${fut.join(' or ')}`,
+    ...ctx.targets
+      .map((t) => byName.get(t))
+      .filter((e): e is ScannedExport => !!e?.doc)
+      .map((e) => `Documented interface of ${e.name} (its JSDoc): ${e.doc}`),
     `Other exports: ${others.length ? others.join(', ') : 'none'}`,
     'Mocked dependencies (only these may be used in state_change):',
     ...mocks,
@@ -238,6 +242,7 @@ export function assertionPrompt(ctx: PlanContext): { system: string; user: strin
     '',
     'Answer format: {"act": "...", "assertions": [ ... ]}',
     '- act: ONE JavaScript call of the function under test with the values from the Given/When steps, e.g. isValid("abc"). Only the function name, literals and <column> placeholders.',
+    '       If the function returns a function and a step uses that function, call it in the same act, e.g. makeCheck(2)("x", 0).',
     '- assertions: at least one per Then step. Each has "then" (T1, T2, ...), "category" and its slots:',
     '  equality:     {"then": "T1", "category": "equality", "actual": "result", "expected": <JSON value>}',
     '                "actual" is "result" (what the call returns) or a part of it, e.g. "result.age" or "result.length".',
@@ -261,6 +266,10 @@ export function assertionPrompt(ctx: PlanContext): { system: string; user: strin
     ...(sc.isOutline
       ? ['6. Write "when" on the outcome column (for example result), not one assertion per row.']
       : []),
+    '7. Every value written in the Given/When steps is used in "act" (e.g. "the setting 2" -> the call gets 2).',
+    '8. "actual" may only use field names that the steps use (e.g. "the value is ..." -> result.value), or length/size.',
+    '   Use the documented interface for the shape of the result: if it returns a Function, call it in "act" or check typeof result.',
+    '9. Write string values without the quote marks of the steps: "text/html", not "\\"text/html\\"".',
     '',
     'Example. Steps: S1: Given the price "12.5"  S2: When the price is formatted  T1: Then the text is "12.50 USD"',
     '{"act": "formatPrice(\\"12.5\\")", "assertions": [{"then": "T1", "category": "equality", "actual": "result", "expected": "12.50 USD"}]}',
@@ -323,6 +332,12 @@ export function checkAssertionAnswer(raw: RawAnswer, ctx: PlanContext): CheckedA
         `"act" must call the function under test (${ctx.targets.join(' or ')}), not ${c.calleeText ?? 'something else'}`,
       );
     }
+    // C3-14 pilot: a Given/When value the call never gets (compileTrust(<hop>) for "the trust setting 2")
+    const unused = unusedStepValues(sc, act);
+    if (unused.length)
+      problems.push(
+        `"act" does not use the step value(s) ${unused.map((u) => `${u.value} (${u.step})`).join(', ')}; every Given/When value goes into the call (rule 7)`,
+      );
   }
 
   // assertions
@@ -384,12 +399,18 @@ export function checkAssertionAnswer(raw: RawAnswer, ctx: PlanContext): CheckedA
             `${where}: ${actual} only comes from the mock ${fromMock.target} (${fromMock.decision_id}), not from the function under test (rule 4)`,
           );
         }
+        // C3-14 pilot: result.type / result.q when the steps say "the value" and "the quality" (rule 8)
+        const invented = inventedResultFields(actual, sc, ctx);
+        if (invented.length)
+          problems.push(
+            `${where}: "actual" uses field(s) ${invented.join(', ')} that no step names; use the words of the steps (e.g. result.value) or check result itself (rule 8)`,
+          );
         slot.actual = actual;
       };
       if (cat === 'equality') {
         checkActual();
         if (!('expected' in a)) problems.push(`${where}: equality needs "expected"`);
-        slot.expected = a.expected;
+        slot.expected = unquoteValue(a.expected, sc);
         renderValue(a.expected, ctx.params, unknownPh);
       } else if (cat === 'range') {
         checkActual();
@@ -429,7 +450,7 @@ export function checkAssertionAnswer(raw: RawAnswer, ctx: PlanContext): CheckedA
         if (change === 'called_with') {
           if (!Array.isArray(a.args)) problems.push(`${where}: called_with needs "args" (a list)`);
           else {
-            slot.args = a.args;
+            slot.args = unquoteValue(a.args, sc) as unknown[];
             renderValue(a.args, ctx.params, unknownPh);
             problems.push(...inventedArgFields(a.args, raw.act, ctx).map((p) => `${where}: ${p}`));
           }
@@ -459,6 +480,91 @@ export function checkAssertionAnswer(raw: RawAnswer, ctx: PlanContext): CheckedA
       problems.push(`${label} both throws and checks result (rule 2)`);
   }
   return { problems, act, actCode, quoted: [...quoted].sort(), assertions, cases };
+}
+
+const stepText = (sc: C3ScenarioInput) => sc.steps.map((st) => st.text).join(' ');
+
+/**
+ * C3-14 pilot: values written in the Given/When steps ("quoted text", numbers, true/false) that the act
+ * does not contain. <column> placeholders are not values. Then-step values are checked by the assertions.
+ */
+export function unusedStepValues(
+  sc: C3ScenarioInput,
+  act: string,
+): { value: string; step: string }[] {
+  const out: { value: string; step: string }[] = [];
+  let s = 0;
+  for (const st of sc.steps) {
+    if (st.keyword === 'Then') continue;
+    const step = `S${++s}`;
+    const quotedVals = [...st.text.matchAll(/"([^"]*)"/g)].map((m) => m[1]!);
+    const rest = st.text.replace(/"[^"]*"/g, ' ').replace(/<[^<>]+>/g, ' ');
+    const bare = [...rest.matchAll(/(?<![\w.])(-?\d+(?:\.\d+)?|true|false|null)(?![\w.])/g)].map(
+      (m) => m[1]!,
+    );
+    for (const v of quotedVals) if (v && !act.includes(v)) out.push({ value: `"${v}"`, step });
+    for (const v of bare)
+      if (!new RegExp(`(?<![\\w.])${v.replace('.', '\\.')}(?![\\w.])`).test(act))
+        out.push({ value: v, step });
+  }
+  return out;
+}
+
+/** Built-in properties a step need not name (2 normalized types are returned -> result.length). */
+const BUILTIN_FIELDS = new Set(['length', 'size']);
+
+/**
+ * C3-14 pilot: field names in "actual" (result.a.b) that the Then steps do not name. Words inside quotes
+ * are values, not names, so they do not count ("the type \"text/html; q=0.5\"" names no field q).
+ * A field may be a short form of a Then word ("params" for "parameters"); Examples columns count.
+ */
+export function inventedResultFields(
+  actual: string,
+  sc: C3ScenarioInput,
+  ctx: PlanContext,
+): string[] {
+  const thenText = sc.steps
+    .filter((st) => st.keyword === 'Then')
+    .map((st) => st.text.replace(/"[^"]*"/g, ' '))
+    .join(' ');
+  const words = `${thenText} ${[...ctx.params.keys()].join(' ')}`
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  // same word, or a short form: one starts with the other (4+ letters), or 5+ shared first letters
+  // ("params" ~ "parameters", "value" ~ "values"); one or two letters ("q") never count.
+  const shared = (a: string, b: string) => {
+    let i = 0;
+    while (i < a.length && i < b.length && a[i] === b[i]) i++;
+    return i;
+  };
+  const named = (f: string) =>
+    words.some(
+      (w) =>
+        w === f ||
+        (Math.min(f.length, w.length) >= 4 && (w.startsWith(f) || f.startsWith(w))) ||
+        shared(f, w) >= 5,
+    );
+  // method calls such as .trim() are not fields
+  const fields = [...actual.matchAll(/\??\.([A-Za-z_$][\w$]*)(?![\w$])(?!\s*\()/g)].map(
+    (m) => m[1]!,
+  );
+  return fields.filter((f) => !BUILTIN_FIELDS.has(f) && !named(f.toLowerCase()));
+}
+
+/**
+ * C3-14 pilot: Qwen copied the step's quote marks into the value ("\"text/html\""). A string that is the
+ * text of a step value wrapped in quotes is unwrapped. Deterministic, recorded in the plan as the clean value.
+ */
+export function unquoteValue(v: unknown, sc: C3ScenarioInput): unknown {
+  if (Array.isArray(v)) return v.map((x) => unquoteValue(x, sc));
+  if (v && typeof v === 'object')
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, unquoteValue(x, sc)]));
+  if (typeof v === 'string') {
+    const m = /^(["'])(.+)\1$/.exec(v);
+    if (m && stepText(sc).includes(m[2]!)) return m[2]!;
+  }
+  return v;
 }
 
 /** Every object key inside a JSON value (args of called_with, expected of equality). */

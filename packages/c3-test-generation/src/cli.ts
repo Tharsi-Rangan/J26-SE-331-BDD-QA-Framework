@@ -3,11 +3,13 @@
 //   c3 run  --in runs/<RUN-ID> --subject-root <path> --out runs/<RUN-ID> [--no-model]
 //   c3 scan --subject-root <path> --module lib/utils.js [--exports a,b] [--out scan.json]
 //   c3 model-check   (sends one tiny prompt to the model in .env and prints the answer)
+//   c3 pilot --run runs/<RUN-ID> --buggy <path> --fixed <path> [--label Express-5]   (C3-14)
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseRunArgs, parseScanArgs } from './args.js';
+import { parsePilotArgs, parseRunArgs, parseScanArgs } from './args.js';
 import { modelCheck, run, scanCommand } from './index.js';
 import { loadDotEnv } from './model/config.js';
+import { pilot } from './pilot.js';
 import { createModelClient, readModelConfig, type ModelClient } from './model/index.js';
 
 try {
@@ -16,6 +18,8 @@ try {
   if (envFile) console.log(`[c3] settings from ${envFile}`);
   if (argv[0] === 'model-check') {
     await modelCheck();
+  } else if (argv[0] === 'pilot') {
+    pilot(parsePilotArgs(argv));
   } else if (argv[0] === 'scan') {
     scanCommand(parseScanArgs(argv));
   } else {

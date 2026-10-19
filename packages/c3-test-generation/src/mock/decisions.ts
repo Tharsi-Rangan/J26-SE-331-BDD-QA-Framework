@@ -74,11 +74,52 @@ export function chooseTargetExports(scenario: C3ScenarioInput, scan: ModuleScan)
   if (named.length) {
     return { exports: named, basis: `named in the scenario text: ${named.join(', ')}` };
   }
+  // Second try (C3-14 pilot): the most name words found in the scenario or feature text,
+  // e.g. "Trust a number of hops" -> compileTrust ("trust"). Only a single best export counts.
+  const fullText = `${text} ${scenario.featureName.toLowerCase()}`;
+  const fullWords = new Set(fullText.split(/[^a-z0-9]+/).filter(Boolean));
+  const scored = candidates.map((name) => ({
+    name,
+    hits: pathWords(name).filter((w) => !GENERIC_NAME_WORDS.has(w) && hasWord(fullWords, w)),
+  }));
+  const best = Math.max(...scored.map((s) => s.hits.length));
+  const top = scored.filter((s) => s.hits.length === best);
+  if (best > 0 && top.length === 1) {
+    return {
+      exports: [top[0]!.name],
+      basis: `partly named in the scenario or feature text (${top[0]!.hits.join(', ')}): ${top[0]!.name}`,
+    };
+  }
   return {
     exports: candidates,
     basis: `no export named in the scenario; using all ${candidates.length} in scope`,
   };
 }
+
+/** Name words too common to pick an export on their own (isAbsolute, compileTrust, setCharset ...). */
+const GENERIC_NAME_WORDS = new Set([
+  'is',
+  'has',
+  'get',
+  'set',
+  'to',
+  'of',
+  'on',
+  'in',
+  'do',
+  'by',
+  'for',
+  'and',
+  'make',
+  'create',
+  'compile',
+  'build',
+  'new',
+  'check',
+  'handle',
+  'run',
+  'process',
+]);
 
 /** 'load' matches 'load', 'loads', 'loaded', 'loading' (simple endings only, no dictionary). */
 function hasWord(textWords: ReadonlySet<string>, w: string): boolean {
