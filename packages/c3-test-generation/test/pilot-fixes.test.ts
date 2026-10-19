@@ -13,11 +13,30 @@ import {
   unusedStepValues,
 } from '../src/assert/plan.js';
 import { renderCase } from '../src/assert/templates.js';
+import { renderValue } from '../src/assert/expr.js';
 import type { C3ScenarioInput, ExampleRow, ScenarioStep } from '../src/input/types.js';
 import { scanModule } from '../src/scan/scanner.js';
 import type { ScannedExport } from '../src/scan/types.js';
 
 const EXPORTS: ScannedExport[] = [
+  {
+    name: 'normalizeTypes',
+    style: 'named',
+    line: 4,
+    dependencies: [],
+    valueKind: 'function',
+    params: ['types'],
+    doc: 'Normalize `types`, for example "html" becomes "text/html". | @param {Array} types | @return {Array}',
+  },
+  {
+    name: 'compileETag',
+    style: 'named',
+    line: 5,
+    dependencies: [],
+    valueKind: 'function',
+    params: ['val'],
+    doc: 'Compile "etag" value to function. | @param {Boolean|String|Function} val | @return {Function}',
+  },
   {
     name: 'normalizeType',
     style: 'named',
@@ -257,5 +276,135 @@ describe('C3-14 fix-3: the documented interface (JSDoc) goes into the prompt', (
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ---------------------------------------------------------------- fix-4 (run 2: 6 false alarms + 1 stub)
+
+const ETAG = scenario(
+  'Select the ETag function from the setting',
+  [
+    ['Given', 'the ETag setting <setting>'],
+    ['When', 'the ETag function is compiled'],
+    ['Then', 'the function is "<kind>"'],
+  ],
+  [
+    { rowIndex: 1, values: { setting: 'true', kind: 'weak' } },
+    { rowIndex: 2, values: { setting: 'weak', kind: 'weak' } },
+    { rowIndex: 3, values: { setting: 'false', kind: 'none' } },
+  ],
+);
+const TYPES = scenario('Normalize a list of types', [
+  ['Given', 'the types "html" and "json"'],
+  ['When', 'the types are normalized'],
+  ['Then', '2 normalized types are returned'],
+]);
+const SHORT = scenario('Expand a short type name', [
+  ['Given', 'the type "html"'],
+  ['When', 'the type is normalized'],
+  ['Then', 'the value is "text/html" with no parameters'],
+]);
+const LIST = scenario('Trust a list of addresses', [
+  ['Given', 'the trust setting "127.0.0.1, 10.0.0.1"'],
+  ['When', 'the address "10.0.0.1" is checked'],
+  ['Then', 'the address is trusted'],
+]);
+const eq = (actual: string, expected: unknown, extra: object = {}) => ({
+  then: 'T1',
+  category: 'equality',
+  actual,
+  expected,
+  ...extra,
+});
+const problemsOf = (sc: C3ScenarioInput, target: string, act: string, assertions: object[]) =>
+  checkAssertionAnswer({ act, assertions }, planContext(sc, EXPORTS, [target])).problems.join('\n');
+
+describe('C3-14 fix-4: the false alarms of run 2', () => {
+  test('a documented Object result is not compared whole with a string (002-01)', () => {
+    expect(
+      problemsOf(SHORT, 'normalizeType', 'normalizeType("html")', [eq('result', 'text/html')]),
+    ).toMatch(/documented result is Object, so all of result cannot equal "text\/html".*rule 8/);
+    expect(
+      problemsOf(SHORT, 'normalizeType', 'normalizeType("html")', [
+        eq('result.value', 'text/html'),
+      ]),
+    ).toBe('');
+  });
+
+  test('keys of an expected object must be named by the Then step (002-02)', () => {
+    const p = problemsOf(QUALITY, 'normalizeType', 'normalizeType("text/html; q=0.5")', [
+      eq('result', { type: 'text/html', quality: 0.5 }),
+    ]);
+    expect(p).toMatch(/"expected" uses field\(s\) type that no step names/);
+    expect(
+      problemsOf(QUALITY, 'normalizeType', 'normalizeType("text/html; q=0.5")', [
+        eq('result', { value: 'text/html', quality: 0.5 }),
+      ]),
+    ).not.toMatch(/field/);
+  });
+
+  test('strings the steps never state are rejected (002-03 "application/json")', () => {
+    const p = problemsOf(TYPES, 'normalizeTypes', 'normalizeTypes(["html", "json"])', [
+      eq('result.length', 2),
+      eq('result[0]', 'text/html'),
+      eq('result[1]', 'application/json'),
+    ]);
+    expect(p).toMatch(/"text\/html", which no step states/);
+    expect(p).toMatch(/"application\/json", which no step states/);
+    expect(
+      problemsOf(TYPES, 'normalizeTypes', 'normalizeTypes(["html", "json"])', [
+        eq('result.length', 2),
+      ]),
+    ).toBe('');
+  });
+
+  test('a Then step with <kind> needs "when" or "<kind>" (003-01: the "none" row)', () => {
+    const run2 = [eq('typeof result', 'function')];
+    expect(problemsOf(ETAG, 'compileETag', 'compileETag(<setting>)', run2)).toMatch(
+      /Then step T1 depends on <kind>.*rule 11/,
+    );
+    const good = [
+      eq('typeof result', 'function', { when: { column: 'kind', equals: 'weak' } }),
+      eq('result', null, { when: { column: 'kind', equals: 'none' } }),
+    ];
+    expect(problemsOf(ETAG, 'compileETag', 'compileETag(<setting>)', good)).toBe('');
+  });
+
+  test('a <column> of a When step must reach the act (004-02: compileTrust(2) without <hop>)', () => {
+    expect(
+      problemsOf(HOPS, 'compileTrust', 'compileTrust(2)', [eq('result', '<trusted>')]),
+    ).toMatch(/does not use the step value\(s\) <hop> \(S2\)/);
+  });
+
+  test('a list value passed split up counts as used (004-03 was stubbed in run 2)', () => {
+    expect(unusedStepValues(LIST, 'compileTrust(["127.0.0.1", "10.0.0.1"])("10.0.0.1")')).toEqual(
+      [],
+    );
+    expect(unusedStepValues(LIST, 'compileTrust(["10.0.0.1"])("10.0.0.1")')).toEqual([
+      { value: '"127.0.0.1, 10.0.0.1"', step: 'S1' },
+    ]);
+  });
+
+  test('an expected object renders as toMatchObject (the requirement names some fields, not all)', () => {
+    const ctx = planContext(QUALITY, EXPORTS, ['normalizeType']);
+    const c = checkAssertionAnswer(
+      {
+        act: 'normalizeType("text/html; q=0.5")',
+        assertions: [eq('result', { value: 'text/html', quality: 0.5 })],
+      },
+      ctx,
+    );
+    const plan = {
+      scenario_id: QUALITY.scenarioId,
+      act: c.act,
+      act_code: c.actCode,
+      quoted_columns: c.quoted,
+      params: {},
+      assertions: c.assertions,
+      cases: c.cases,
+    };
+    expect(renderCase(plan as never, c.cases[0]!).join('\n')).toContain(
+      `expect(result).toMatchObject(${renderValue({ value: 'text/html', quality: 0.5 }, new Map())});`,
+    );
   });
 });

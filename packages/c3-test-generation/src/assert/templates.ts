@@ -1,5 +1,5 @@
 // C3-08 fixed templates: typed assertion slots -> Jest code. The model never writes these lines.
-//   equality     expect(<actual>).toBe(<expected>)  (toEqual for objects/arrays/row values; toBeFalsy for false, (x ?? null).toBeNull for null)
+//   equality     expect(<actual>).toBe(<expected>)  (toMatchObject for objects, toEqual for arrays/row values; toBeFalsy for false, (x ?? null).toBeNull for null)
 //   exception    expect(() => <act>).toThrow(<Error>)   (async: await expect(<act>).rejects.toThrow(...))
 //   state_change expect(<mock>).toHaveBeenCalledWith(...) / .toHaveBeenCalled() / .not.toHaveBeenCalled() / .toHaveBeenCalledTimes(n)
 //   range        expect(<actual>).toBeGreaterThanOrEqual(<min>); expect(<actual>).toBeLessThanOrEqual(<max>)
@@ -10,6 +10,8 @@ import type { AssertionSlot, PlanCase, ScenarioPlan } from './plan.js';
 export const TEMPLATE_NOTES = {
   falsy:
     'expected false -> toBeFalsy(): JavaScript predicates often return undefined for "no", which the requirement also means.',
+  partial:
+    'expected object -> toMatchObject(): the requirement names some fields of the result, not all (C3-14 pilot: normalizeType also returns params).',
   nullish:
     'expected null -> expect(x ?? null).toBeNull(): JSON has no undefined, so null from the model means "no value"; a JS function that returns nothing gives undefined (C3-14 pilot, compileETag(false)).',
 };
@@ -19,8 +21,11 @@ function equality(a: AssertionSlot, params: ReadonlyMap<string, string>): string
   if (a.expected === false) return `expect(${actual}).toBeFalsy();`;
   if (a.expected === null) return `expect(${actual} ?? null).toBeNull();`;
   const exp = renderValue(a.expected, params);
-  return isPrimitiveLiteral(exp)
-    ? `expect(${actual}).toBe(${exp});`
+  if (isPrimitiveLiteral(exp)) return `expect(${actual}).toBe(${exp});`;
+  // C3-14 run 2: the requirement names some fields, not all of them -> partial match for objects
+  const plainObject = !!a.expected && typeof a.expected === 'object' && !Array.isArray(a.expected);
+  return plainObject
+    ? `expect(${actual}).toMatchObject(${exp});`
     : `expect(${actual}).toEqual(${exp});`;
 }
 

@@ -106,7 +106,7 @@ Fixed templates (`src/assert/templates.ts`):
 
 | Category       | Jest code                                                                                                   |
 | -------------- | ----------------------------------------------------------------------------------------------------------- |
-| `equality`     | `expect(actual).toBe(x)` (literals), `toEqual(x)` (objects, arrays, row values), `toBeFalsy()` for `false`, `expect(actual ?? null).toBeNull()` for `null` |
+| `equality`     | `expect(actual).toBe(x)` (literals), `toMatchObject(x)` (objects: the requirement names some fields, not all), `toEqual(x)` (arrays, row values), `toBeFalsy()` for `false`, `expect(actual ?? null).toBeNull()` for `null` |
 | `exception`    | `expect(() => act).toThrow(Error)`; async: `await expect(act).rejects.toThrow(Error)`                       |
 | `state_change` | `expect(mock).toHaveBeenCalledWith(...)`, `.toHaveBeenCalled()`, `.not.toHaveBeenCalled()`, `.toHaveBeenCalledTimes(n)` |
 | `range`        | `expect(actual).toBeGreaterThanOrEqual(min)` / `toBeLessThanOrEqual(max)` (or the strict forms)              |
@@ -249,6 +249,16 @@ also fail on the fixed code). Three causes, each now handled for every subject:
 | Quote marks copied into the value: `toBe("\"text/html\"")` | 3 | A string that is a step value wrapped in quotes is unwrapped (`unquoteValue`) |
 | A Given/When value missing from the act: `compileTrust(<hop>)` for "the trust setting 2" | 2 | Rule 7 + check: every Given/When value must appear in the act, else the answer is retried with the reason (`unusedStepValues`) |
 | Result shape guessed: `result.type`, `result.q`; a returned function compared to `true` | 6 | Rule 8 + check: `actual` may only use field names from the Then steps (or `length`/`size`) (`inventedResultFields`); the export's **JSDoc** (description, `@param`, `@return`) is shown to the model as the documented interface, never its code |
+
+Fix-4, from Qwen run 2 (14 tests, 6 false alarms, 1 stub). Five more generic causes (prompt version 0.6.0):
+
+| Cause in run 2 | Fix |
+|---|---|
+| A documented `Object`/`Array`/`Function` result compared whole with a plain value (`toBe("text/html")`) | Rejected with the documented type (`documentedReturn`) |
+| Invented key inside an expected object (`{ type: ... }`); whole-object `toEqual` fails on extra fields | Keys checked like fields; objects render as `toMatchObject` |
+| A string no step states (`"application/json"`) | Rule 10 + check (`ungroundedStrings`); `typeof` words are allowed |
+| A Then step with `<kind>` but one assertion for every row (the `none` row) | Rule 11 + check: use `"<kind>"` or `when` on that column (`thenColumns`) |
+| A When-step `<hop>` missing from the act; a list value passed split up was wrongly rejected | Placeholders of Given/When steps must reach the act; `"a, b"` counts as used when every part is in the act |
 
 When the requirement does not say what shape the result has, C3 takes the shape from the documented
 interface. If there is no documentation either, the answer cannot pass the checks and the scenario is a stub

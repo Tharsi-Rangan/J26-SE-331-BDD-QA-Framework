@@ -21,7 +21,7 @@ import {
   replacePlaceholders,
 } from './expr.js';
 
-export const ASSERTION_PROMPT_VERSION = '0.5.0';
+export const ASSERTION_PROMPT_VERSION = '0.6.0';
 export const ASSERTION_CATEGORIES = ['equality', 'exception', 'state_change', 'range'] as const;
 export type AssertionCategory = (typeof ASSERTION_CATEGORIES)[number];
 export const STATE_CHANGES = ['called_with', 'called', 'not_called', 'called_times'] as const;
@@ -270,6 +270,12 @@ export function assertionPrompt(ctx: PlanContext): { system: string; user: strin
     '8. "actual" may only use field names that the steps use (e.g. "the value is ..." -> result.value), or length/size.',
     '   Use the documented interface for the shape of the result: if it returns a Function, call it in "act" or check typeof result.',
     '9. Write string values without the quote marks of the steps: "text/html", not "\\"text/html\\"".',
+    '10. A string in "expected" must be written in the steps. Do not add values the steps do not state.',
+    ...(sc.isOutline
+      ? [
+          '11. When a Then step has a <column>, every assertion for it uses "<column>" in its value or "when" on that column.',
+        ]
+      : []),
     '',
     'Example. Steps: S1: Given the price "12.5"  S2: When the price is formatted  T1: Then the text is "12.50 USD"',
     '{"act": "formatPrice(\\"12.5\\")", "assertions": [{"then": "T1", "category": "equality", "actual": "result", "expected": "12.50 USD"}]}',
@@ -341,6 +347,7 @@ export function checkAssertionAnswer(raw: RawAnswer, ctx: PlanContext): CheckedA
   }
 
   // assertions
+  const rawTexts: string[] = []; // the model's JSON of each kept assertion, same order
   const tIds = thenIds(sc);
   const assertions: AssertionSlot[] = [];
   if (!Array.isArray(raw.assertions) || raw.assertions.length === 0) {
@@ -411,6 +418,38 @@ export function checkAssertionAnswer(raw: RawAnswer, ctx: PlanContext): CheckedA
         checkActual();
         if (!('expected' in a)) problems.push(`${where}: equality needs "expected"`);
         slot.expected = unquoteValue(a.expected, sc);
+        // C3-14 run 2: values the steps never state ("application/json" for "2 types are returned")
+        const ungrounded = ungroundedStrings(slot.expected, slot.actual ?? 'result', sc);
+        if (ungrounded.length)
+          problems.push(
+            `${where}: "expected" has ${ungrounded.map((u) => `"${u}"`).join(', ')}, which no step states; use only values from the steps (rules 1, 10)`,
+          );
+        // C3-14 run 2: keys of an expected object are field names too (rule 8)
+        if (isObj(slot.expected)) {
+          const badKeys = inventedResultFields(
+            Object.keys(slot.expected)
+              .map((k) => `result.${k}`)
+              .join(' '),
+            sc,
+            ctx,
+          );
+          if (badKeys.length)
+            problems.push(
+              `${where}: "expected" uses field(s) ${badKeys.join(', ')} that no step names (rule 8)`,
+            );
+        }
+        // C3-14 run 2: the documented result is an Object/Array/Function, compared whole with a plain value
+        // (not when the act calls the returned function, or the value is a <column>)
+        const ret = /\)\s*\(/.test(act ?? '') ? undefined : documentedReturn(ctx);
+        if (
+          ret &&
+          !(typeof slot.expected === 'string' && /^<[^<>]+>$/.test(slot.expected)) &&
+          (slot.actual ?? 'result') === 'result' &&
+          ['string', 'number', 'boolean'].includes(typeof slot.expected)
+        )
+          problems.push(
+            `${where}: the documented result is ${ret}, so all of result cannot equal ${JSON.stringify(slot.expected)}; check a field the Then step names, result.length, or typeof result (rule 8)`,
+          );
         renderValue(a.expected, ctx.params, unknownPh);
       } else if (cat === 'range') {
         checkActual();
@@ -464,6 +503,7 @@ export function checkAssertionAnswer(raw: RawAnswer, ctx: PlanContext): CheckedA
       if (unknownPh.length)
         problems.push(`${where}: unknown placeholder(s) <${[...new Set(unknownPh)].join('>, <')}>`);
       assertions.push(slot);
+      rawTexts.push(JSON.stringify(a));
     });
   }
 
@@ -471,6 +511,18 @@ export function checkAssertionAnswer(raw: RawAnswer, ctx: PlanContext): CheckedA
   for (const t of tIds)
     if (assertions.length && !assertions.some((a) => a.then === t))
       problems.push(`Then step ${t} has no assertion`);
+  // C3-14 run 2: a Then step with <column> must depend on it (compileETag(<setting>) with kind "none")
+  if (sc.isOutline) {
+    const thenCols = thenColumns(sc, ctx);
+    assertions.forEach((a, i) => {
+      for (const col of thenCols.get(a.then) ?? []) {
+        if (a.when?.column !== col && !rawTexts[i]!.includes(`<${col}>`))
+          problems.push(
+            `assertion ${i + 1}: Then step ${a.then} depends on <${col}>, so use "<${col}>" in the value or "when" on column ${col} (rule 11)`,
+          );
+      }
+    });
+  }
   const cases = buildCases(sc, assertions);
   for (const c of cases) {
     const label = c.row ? `row ${c.row}` : 'the scenario';
@@ -497,15 +549,83 @@ export function unusedStepValues(
   for (const st of sc.steps) {
     if (st.keyword === 'Then') continue;
     const step = `S${++s}`;
-    const quotedVals = [...st.text.matchAll(/"([^"]*)"/g)].map((m) => m[1]!);
+    const quotedVals = [...st.text.matchAll(/"([^"]*)"/g)]
+      .map((m) => m[1]!)
+      .filter((v) => !/^<[^<>]+>$/.test(v));
+    // <column> placeholders of Given/When steps must reach the call too (compileTrust(2) without <hop>)
+    for (const m of st.text.matchAll(/<([^<>]+)>/g))
+      if (!act.includes(`<${m[1]}>`)) out.push({ value: `<${m[1]}>`, step });
     const rest = st.text.replace(/"[^"]*"/g, ' ').replace(/<[^<>]+>/g, ' ');
     const bare = [...rest.matchAll(/(?<![\w.])(-?\d+(?:\.\d+)?|true|false|null)(?![\w.])/g)].map(
       (m) => m[1]!,
     );
-    for (const v of quotedVals) if (v && !act.includes(v)) out.push({ value: `"${v}"`, step });
+    // a list value may be passed split up: "127.0.0.1, 10.0.0.1" -> ["127.0.0.1", "10.0.0.1"]
+    const usedText = (v: string) =>
+      act.includes(v) ||
+      (v.includes(',') &&
+        v
+          .split(',')
+          .map((x) => x.trim())
+          .filter(Boolean)
+          .every((x) => act.includes(x)));
+    for (const v of quotedVals) if (v && !usedText(v)) out.push({ value: `"${v}"`, step });
     for (const v of bare)
       if (!new RegExp(`(?<![\\w.])${v.replace('.', '\\.')}(?![\\w.])`).test(act))
         out.push({ value: v, step });
+  }
+  return out;
+}
+
+/** typeof answers are words of JavaScript, not values the steps must state. */
+const TYPEOF_WORDS = new Set(['function', 'object', 'string', 'number', 'boolean', 'undefined']);
+
+/**
+ * C3-14 run 2: strings in "expected" that no step states (rule 1). <column> values and typeof answers are
+ * fine. Compared without case and quote marks.
+ */
+export function ungroundedStrings(
+  expected: unknown,
+  actual: string,
+  sc: C3ScenarioInput,
+): string[] {
+  const text = stepText(sc).toLowerCase();
+  const out: string[] = [];
+  const walk = (v: unknown) => {
+    if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === 'object') Object.values(v).forEach(walk);
+    else if (typeof v === 'string') {
+      if (/<[^<>]+>/.test(v)) return;
+      if (/^typeof\b/.test(actual.trim()) && TYPEOF_WORDS.has(v)) return;
+      if (v.trim() && !text.includes(v.toLowerCase())) out.push(v);
+    }
+  };
+  walk(expected);
+  return out;
+}
+
+/** The type in "@return {Object}" of the function under test, when it is not a plain value. */
+export function documentedReturn(ctx: PlanContext): string | undefined {
+  for (const t of ctx.targets) {
+    const doc = ctx.exports.find((e) => e.name === t)?.doc;
+    const m = doc && /@returns?\s*\{([^}]+)\}/.exec(doc);
+    if (!m) continue;
+    const kinds = m[1]!.split('|').map((k) => k.trim().toLowerCase());
+    if (kinds.every((k) => ['object', 'array', 'function'].includes(k) || k.endsWith('[]')))
+      return m[1]!.trim();
+  }
+  return undefined;
+}
+
+/** Examples columns named in each Then step ("Then the function is \"<kind>\"" -> T1: kind). */
+export function thenColumns(sc: C3ScenarioInput, ctx: PlanContext): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  let t = 0;
+  for (const st of sc.steps) {
+    if (st.keyword !== 'Then') continue;
+    const cols = [...st.text.matchAll(/<([^<>]+)>/g)]
+      .map((m) => m[1]!)
+      .filter((c) => ctx.params.has(c));
+    out.set(`T${++t}`, [...new Set(cols)]);
   }
   return out;
 }
