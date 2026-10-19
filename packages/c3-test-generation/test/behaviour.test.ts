@@ -303,7 +303,7 @@ describe('C3-07 inside c3 run', () => {
   async function runGolden(model?: FakeModelClient) {
     const out = fs.mkdtempSync(path.join(os.tmpdir(), 'c3-mb-'));
     fs.cpSync(GOLDEN, out, { recursive: true });
-    fs.rmSync(path.join(out, 'c3', 'mock_decisions.json'));
+    for (const d of ['c3', 'c4']) fs.rmSync(path.join(out, d), { recursive: true, force: true }); // no stale C3/C4 output
     await run({ in: GOLDEN, out, generatedAt: FIXED_TIME, model });
     return out;
   }

@@ -11,6 +11,7 @@ import {
 import { buildMockDecisions, type MockDecision } from './mock/decisions.js';
 import { planAssertions, planContext } from './assert/plan.js';
 import { chooseStrategies } from './strategy.js';
+import { TEST_ROOT, writeJestTests } from './writer/jest-writer.js';
 import { createModelClient, readModelConfig, type ModelClient } from './model/index.js';
 import { scanModule } from './scan/scanner.js';
 import type { ModuleScan } from './scan/types.js';
@@ -66,6 +67,18 @@ export type {
 export { renderCase, TEMPLATE_NOTES } from './assert/templates.js';
 export { chooseStrategies, chooseStrategy, STRATEGY_RULES_VERSION } from './strategy.js';
 export type { Strategy, StrategyChoice } from './strategy.js';
+export {
+  caseLabel,
+  JEST_CONFIG,
+  jestConfig,
+  rowValue,
+  TEST_ROOT,
+  testId,
+  writeJestTests,
+} from './writer/jest-writer.js';
+export type { ManifestTest, TestManifestFile, WrittenFiles } from './writer/jest-writer.js';
+export { makeSandbox, removeSandbox, runJest } from './runner/jest.js';
+export type { JestRunResult, JestTestResult } from './runner/jest.js';
 export { checkExpression, paramName, renderValue, replacePlaceholders } from './assert/expr.js';
 
 /** C3's version, written as producer.tool_version in every contract file. */
@@ -80,7 +93,7 @@ export const WORK_DIR = 'c3/work';
  * Runnable Test Generation with Explainable Assertions and Mocking.
  * Done so far: C3-03 input reader, C3-04 dependency scan, C3-05 rule-based mock decisions,
  * C3-06 model client, C3-07 mock behaviour from the Given/When steps, C3-08 typed assertions,
- * C3-09 strategy selection.
+ * C3-09 strategy selection, C3-10 Jest writer + test_manifest.json.
  */
 export async function run(
   options: RunOptions & { generatedAt?: string; model?: ModelClient },
@@ -163,6 +176,32 @@ export async function run(
     console.log(`[c3] strategy (rules ${strategies.rules_version}):`);
     for (const c of strategies.choices)
       console.log(`  ${c.scenario_id} ${c.strategy} (${c.rule_id}): ${c.reason}`);
+
+    // C3-10: Jest files (one per requirement) + c3/test_manifest.json (contract file)
+    const written = writeJestTests({
+      inputs,
+      plans,
+      strategies: strategies.choices,
+      mockFile: file,
+      behaviour: work,
+      exports: new Map(scans.map((x) => [x.modulePath, x.scan.exports])),
+      generatedAt: options.generatedAt,
+      toolVersion: TOOL_VERSION,
+    });
+    for (const dir of [TEST_ROOT, 'c3/test_stubs'])
+      fs.rmSync(path.join(options.out, dir), { recursive: true, force: true });
+    for (const [rel, content] of written.files) {
+      const f = path.join(options.out, rel);
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.writeFileSync(f, content);
+    }
+    writeJson(path.join(options.out, 'c3', 'test_manifest.json'), written.manifest);
+    console.log(
+      `[c3] Jest tests (C3-10): ${written.manifest.tests.length} test(s) in ${written.files.size - 1} file(s); ${written.notWritten.length} scenario(s) without a runnable test`,
+    );
+    for (const f of [...written.files.keys()].filter((k) => k.startsWith(TEST_ROOT)))
+      console.log(`  ${f}`);
+    for (const n of written.notWritten) console.log(`  no test for ${n.scenario_id}: ${n.reason}`);
   }
 }
 
