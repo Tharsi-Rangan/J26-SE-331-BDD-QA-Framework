@@ -1,0 +1,37 @@
+> @j26/c2-gherkin-generation@0.1.0 test C:\Users\shanc\OneDrive\Desktop\Research\J26-SE-331-BDD-QA-Framework\packages\c2-gherkin-generation
+> vitest run
+
+
+ RUN  v5.0.3 C:/Users/shanc/OneDrive/Desktop/Research/J26-SE-331-BDD-QA-Framework/packages/c2-gherkin-generation
+
+ ✓ test/args.test.ts (3 tests) 6ms
+ ✓ test/validation-report.test.ts (2 tests) 11ms
+ ✓ test/llm-client.test.ts (4 tests) 41ms
+stdout | test/pipeline.test.ts > C2 generation pipeline > uses final_text and skips non-BDD-ready requirements
+[c2] Generated 1 feature file(s) from 1 BDD-ready requirement(s).
+[c2] Syntax validation: 1 valid, 0 invalid.
+[c2] Validation report: C:\Users\shanc\AppData\Local\Temp\c2-pipeline-hf8fBD\output\c2\validation_report.json
+
+ ✓ test/gherkin-validator.test.ts (3 tests) 6ms
+stderr | test/pipeline.test.ts > C2 generation pipeline > records invalid Gherkin and continues with the next requirement
+[c2] Invalid Gherkin for REQ-EX-001: Parser errors:
+(6:5): expected: #EOF, #TableRow, #DocStringSeparator, #StepLine, #TagLine, #ExamplesLine, #ScenarioLine, #RuleLine, #Comment, #Empty, got 'When'
+
+stdout | test/pipeline.test.ts > C2 generation pipeline > records invalid Gherkin and continues with the next requirement
+[c2] Generated 1 feature file(s) from 2 BDD-ready requirement(s).
+[c2] Syntax validation: 1 valid, 1 invalid.
+[c2] Validation report: C:\Users\shanc\AppData\Local\Temp\c2-pipeline-UKSLoR\output\c2\validation_report.json
+
+ ✓ test/pipeline.test.ts (3 tests) 28ms
+
+ Test Files  5 passed (5)
+      Tests  15 passed (15)
+   Start at  16:56:24
+   Duration  3.93s (transform 56%, import 28%, tests 12%, worker 4%)
+
+PS C:\Users\shanc\OneDrive\Desktop\Research\J26-SE-331-BDD-QA-Framework> 
+
+
+
+
+
