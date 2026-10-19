@@ -180,6 +180,32 @@ and all tests are rebuilt and run again. A scenario still broken after 3 rounds 
 broken test is never released); C3-13 routes it to a stub. `repair_rounds` goes into `test_manifest.json`;
 every round is logged in `c3/work/repair_log.json`.
 
+### Confidence routing (C3-13)
+
+Every scenario C3 received gets a route and a reason in `c3/generation_confidence_report.json` (contract).
+Confidence is a weighted formula over rule-based signals, **not** the model's own confidence
+(formula 0.1.0, threshold 0.8, `calibrated: false`; PP2 calibrates it against the expert labels):
+
+| Signal                          | Weight | Meaning                                                              |
+| ------------------------------- | ------ | -------------------------------------------------------------------- |
+| `all_deterministic_checks_pass` | 0.30   | syntactic, referential and traceability pass for every test          |
+| `semantic_score`                | 0.30   | mean C3-11 semantic score of its tests                               |
+| `runs_clean`                    | 0.10   | Jest ran every test without a broken-test error                      |
+| `no_repair_needed`              | 0.10   | no repair round                                                      |
+| `c2_fully_verified`             | 0.10   | C2 verified the scenario                                             |
+| `mock_behaviour_from_model`     | 0.10   | every mock behaviour came from a checked model answer (or no mocks) |
+
+A clean test scores 0.7 + 0.3 x semantic, so it needs semantic >= 0.34 to run; a repaired test needs >= 0.67.
+
+| Route                  | When                               | Output                                                              |
+| ---------------------- | ---------------------------------- | ------------------------------------------------------------------- |
+| `runnable`             | confidence >= 0.8                  | its tests stay in `c3/runnable_tests`; `test_ids` in the report    |
+| `stub`                 | confidence < 0.8, or no usable plan | `c3/test_stubs/STB-...stub.js`: `test.todo`, the steps, the reason and C3's draft code for a human |
+| `skipped_not_verified` | C2 did not fully verify it         | nothing                                                             |
+
+A runnable scenario whose tests fail on the given subject says so in its reason ("possible bug found; check
+on the fixed version"). Stubs never run (`jest.config.cjs` only looks in `c3/runnable_tests`).
+
 ### Model client (C3-06)
 
 All model calls go through one `ModelClient` (`src/model/`). Settings come only from `.env`

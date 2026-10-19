@@ -20,6 +20,8 @@ import {
 import { makeSandbox, removeSandbox, runJest, type JestRunResult } from './runner/jest.js';
 import { applyVerification, verifyTests, type VerificationWorkFile } from './verify/verify.js';
 import { MAX_REPAIR_ROUNDS, repairLoop } from './verify/repair.js';
+import { confidenceReport, routeScenarios, stubEntry, stubFile } from './route/confidence.js';
+import { renderCase } from './assert/templates.js';
 import { createModelClient, readModelConfig, type ModelClient } from './model/index.js';
 import { scanModule } from './scan/scanner.js';
 import type { ModuleScan } from './scan/types.js';
@@ -99,6 +101,18 @@ export {
 export type { RunStatus, TestVerification, VerificationWorkFile } from './verify/verify.js';
 export { brokenScenarios, MAX_REPAIR_ROUNDS, repairLoop, repairMessages } from './verify/repair.js';
 export type { RepairLogEntry, RepairResult } from './verify/repair.js';
+export {
+  confidenceOf,
+  confidenceReport,
+  FORMULA_VERSION,
+  routeScenarios,
+  signalsFor,
+  stubFile,
+  stubId,
+  THRESHOLD,
+  WEIGHTS,
+} from './route/confidence.js';
+export type { ConfidenceReportFile, ReportScenario, Route, Signals } from './route/confidence.js';
 export type { JestRunResult, JestTestResult } from './runner/jest.js';
 export { checkExpression, paramName, renderValue, replacePlaceholders } from './assert/expr.js';
 
@@ -235,29 +249,97 @@ export async function run(
       max_rounds: MAX_REPAIR_ROUNDS,
       entries: repair.log,
     });
-    const { written, verification } = verified;
-    written.manifest.tests = written.manifest.tests.map((t) => ({
+    const { verification } = verified;
+    let { written } = verified;
+
+    // C3-13: confidence per scenario -> runnable or stub; low-confidence tests leave the runnable files
+    const routeInputs = {
+      inputs,
+      plans: repair.plans.plans,
+      written,
+      verification,
+      repairRounds: repair.rounds,
+      mockFile: file,
+      behaviour: work,
+    };
+    const routed = routeScenarios(routeInputs);
+    const lowConfidence = new Set(
+      routed
+        .filter(
+          (r) =>
+            r.route === 'stub' &&
+            written.manifest.tests.some((t) => t.scenario_id === r.scenario_id),
+        )
+        .map((r) => r.scenario_id),
+    );
+    if (lowConfidence.size)
+      written = writeJestTests({
+        ...writerInputs,
+        plans: {
+          ...repair.plans,
+          plans: repair.plans.plans.map((p) =>
+            lowConfidence.has(p.scenario_id) ? { ...p, source: 'failed' as const } : p,
+          ),
+        },
+      });
+    written.manifest.tests = applyVerification(written.manifest.tests, verification).map((t) => ({
       ...t,
       repair_rounds: repair.rounds.get(t.scenario_id) ?? 0,
     }));
 
+    const scOf = new Map(inputs.scenarios.map((sc) => [sc.scenarioId, sc]));
+    const planOf = new Map(repair.plans.plans.map((p) => [p.scenario_id, p]));
+    const stubFiles = new Map<string, string>();
+    written.manifest.stubs = routed
+      .filter((r) => r.route === 'stub')
+      .map((r) => {
+        const sc = scOf.get(r.scenario_id)!;
+        const plan = planOf.get(r.scenario_id);
+        let draft: string | undefined;
+        try {
+          draft =
+            plan?.act_code && plan.cases[0]
+              ? renderCase(plan, plan.cases[0]).join('\n')
+              : undefined;
+        } catch {
+          draft = undefined;
+        }
+        const entry = stubEntry(sc, r.reason);
+        stubFiles.set(entry.file, stubFile(sc, r.reason, draft));
+        return entry;
+      });
+
     for (const dir of [TEST_ROOT, 'c3/test_stubs'])
       fs.rmSync(path.join(options.out, dir), { recursive: true, force: true });
-    for (const [rel, content] of written.files) {
+    for (const [rel, content] of [...written.files, ...stubFiles]) {
       const f = path.join(options.out, rel);
       fs.mkdirSync(path.dirname(f), { recursive: true });
       fs.writeFileSync(f, content);
     }
-    written.manifest.tests = applyVerification(written.manifest.tests, verification);
     writeJson(path.join(options.out, 'c3', 'test_manifest.json'), written.manifest);
     writeJson(path.join(options.out, WORK_DIR, 'verification.json'), verification);
+    const report = confidenceReport({ ...routeInputs, written }, routed, {
+      generatedAt: options.generatedAt,
+      toolVersion: TOOL_VERSION,
+      model: written.manifest.producer.model,
+    });
+    writeJson(path.join(options.out, 'c3', 'generation_confidence_report.json'), report);
+
     console.log(
-      `[c3] Jest tests (C3-10): ${written.manifest.tests.length} test(s) in ${written.files.size - 1} file(s); ${written.notWritten.length} scenario(s) without a runnable test`,
+      `[c3] Jest tests (C3-10): ${written.manifest.tests.length} test(s) in ${written.files.size - 1} file(s), ${written.manifest.stubs.length} stub(s)`,
     );
-    for (const f of [...written.files.keys()].filter((k) => k.startsWith(TEST_ROOT)))
+    for (const f of [...written.files.keys(), ...stubFiles.keys()].filter(
+      (k) => k !== 'c3/jest.config.cjs',
+    ))
       console.log(`  ${f}`);
-    for (const n of written.notWritten) console.log(`  no test for ${n.scenario_id}: ${n.reason}`);
     printVerification(verification, subjectRoot);
+    console.log(
+      `[c3] confidence (C3-13, formula ${report.formula.version}, threshold ${report.formula.threshold}):`,
+    );
+    for (const r of routed)
+      console.log(
+        `  ${r.scenario_id} ${r.route.padEnd(8)} ${r.confidence.toFixed(3)}  ${r.reason}`,
+      );
   }
 }
 
