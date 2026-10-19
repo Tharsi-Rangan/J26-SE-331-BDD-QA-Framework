@@ -19,6 +19,7 @@ import {
 } from './writer/jest-writer.js';
 import { makeSandbox, removeSandbox, runJest, type JestRunResult } from './runner/jest.js';
 import { applyVerification, verifyTests, type VerificationWorkFile } from './verify/verify.js';
+import { MAX_REPAIR_ROUNDS, repairLoop } from './verify/repair.js';
 import { createModelClient, readModelConfig, type ModelClient } from './model/index.js';
 import { scanModule } from './scan/scanner.js';
 import type { ModuleScan } from './scan/types.js';
@@ -96,6 +97,8 @@ export {
   VERIFY_VERSION,
 } from './verify/verify.js';
 export type { RunStatus, TestVerification, VerificationWorkFile } from './verify/verify.js';
+export { brokenScenarios, MAX_REPAIR_ROUNDS, repairLoop, repairMessages } from './verify/repair.js';
+export type { RepairLogEntry, RepairResult } from './verify/repair.js';
 export type { JestRunResult, JestTestResult } from './runner/jest.js';
 export { checkExpression, paramName, renderValue, replacePlaceholders } from './assert/expr.js';
 
@@ -206,8 +209,37 @@ export async function run(
       generatedAt: options.generatedAt,
       toolVersion: TOOL_VERSION,
     };
-    const verified = writeAndVerify({ ...writerInputs, plans }, subjectRoot);
+    let verified = writeAndVerify({ ...writerInputs, plans }, subjectRoot);
+
+    // C3-12: repair broken tests (max 3 rounds); a scenario still broken gets no runnable test
+    const repair = await repairLoop(
+      plans,
+      verified.verification,
+      new Map(contexts.map((c) => [c.sc.scenarioId, c])),
+      options.model,
+      (p) => {
+        verified = writeAndVerify({ ...writerInputs, plans: p }, subjectRoot);
+        return verified.verification;
+      },
+      { log: (l) => console.log(l) },
+    );
+    if (repair.log.length) {
+      console.log(
+        `[c3] repair (C3-12): ${repair.log.length} round(s) logged, ${repair.gaveUp.size} scenario(s) given up`,
+      );
+      if (repair.gaveUp.size)
+        verified = writeAndVerify({ ...writerInputs, plans: repair.plans }, subjectRoot);
+    }
+    writeJson(path.join(options.out, WORK_DIR, 'assertion_plan.json'), repair.plans);
+    writeJson(path.join(options.out, WORK_DIR, 'repair_log.json'), {
+      max_rounds: MAX_REPAIR_ROUNDS,
+      entries: repair.log,
+    });
     const { written, verification } = verified;
+    written.manifest.tests = written.manifest.tests.map((t) => ({
+      ...t,
+      repair_rounds: repair.rounds.get(t.scenario_id) ?? 0,
+    }));
 
     for (const dir of [TEST_ROOT, 'c3/test_stubs'])
       fs.rmSync(path.join(options.out, dir), { recursive: true, force: true });

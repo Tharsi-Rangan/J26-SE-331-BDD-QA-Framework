@@ -513,6 +513,10 @@ function agreement(
 export interface PlanOptions {
   retries?: number; // default 1
   log?: (line: string) => void;
+  /** C3-12 repair: messages added after the prompt (the previous answer and the Jest error). */
+  followUp?: ChatMessage[];
+  /** Label for the model call, e.g. 'C3-12 repair 2'. */
+  purpose?: string;
 }
 
 /** C3-08 for one scenario. Never throws for a bad model answer: the plan is marked `failed`. */
@@ -527,6 +531,7 @@ export async function planScenario(
   const messages: ChatMessage[] = [
     { role: 'system', content: system },
     { role: 'user', content: user },
+    ...(options.followUp ?? []),
   ];
   const rules = ruleCategories(sc);
   const problems: string[] = [];
@@ -537,7 +542,7 @@ export async function planScenario(
       messages: [...messages],
       temperature: 0,
       maxTokens: 900,
-      purpose: `C3-08 assertions ${sc.scenarioId}`,
+      purpose: `${options.purpose ?? 'C3-08 assertions'} ${sc.scenarioId}`,
     });
     let raw: RawAnswer | undefined;
     let found: string[];
