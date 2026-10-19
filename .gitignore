@@ -12,3 +12,27 @@ coverage/
 *.egg-info/
 .DS_Store
 Thumbs.db
+
+
+# Local C1 state and temporary test artifacts
+.c1-state/
+.pytest-tmp/
+packages/c1-requirement-quality/.c1-state/
+packages/c1-requirement-quality/.pytest-tmp/
+packages/c1-requirement-quality/test-stable-ids.md
+
+# Local C1 machine learning model weights and checkpoints
+packages/c1-requirement-quality/models/**/*.safetensors
+packages/c1-requirement-quality/models/**/*.bin
+packages/c1-requirement-quality/models/**/*.pt
+packages/c1-requirement-quality/models/**/config.json
+packages/c1-requirement-quality/models/**/tokenizer*.json
+
+# Local C1 wizard sessions and generated analysis data
+.c1-sessions/
+
+# Local C1 wizard sessions
+.c1-sessions/
+
+# Local C1 inference outputs and portable research workspaces
+/packages/c1-requirement-quality/local-inference/
