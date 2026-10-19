@@ -117,6 +117,18 @@ A rule-based category guess (keywords such as *error/rejected* -> exception, *be
 
 Output: `c3/work/assertion_plan.json` (internal), read by the Jest writer (C3-10).
 
+### Strategy (C3-09)
+
+Rules only (`src/strategy.ts`, `rules_version` 0.1.0), written to `c3/work/strategy.json` with a reason:
+
+| Rule | Strategy       | When                                                                                     |
+| ---- | -------------- | ---------------------------------------------------------------------------------------- |
+| S-01 | `parametrised` | Scenario Outline: one `test.each` row per Examples row; C2's values and BV/EP refs as-is |
+| S-02 | `factory`      | any other scenario: one test built from the Given/When step values                       |
+
+`property_based` (fast-check over a C2 numeric range) is planned for PP2. A plain scenario with a numeric
+range says in its reason that it is a candidate.
+
 ### Model client (C3-06)
 
 All model calls go through one `ModelClient` (`src/model/`). Settings come only from `.env`

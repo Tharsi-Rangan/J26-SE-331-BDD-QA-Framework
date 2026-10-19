@@ -10,6 +10,7 @@ import {
 } from './mock/behaviour.js';
 import { buildMockDecisions, type MockDecision } from './mock/decisions.js';
 import { planAssertions, planContext } from './assert/plan.js';
+import { chooseStrategies } from './strategy.js';
 import { createModelClient, readModelConfig, type ModelClient } from './model/index.js';
 import { scanModule } from './scan/scanner.js';
 import type { ModuleScan } from './scan/types.js';
@@ -63,6 +64,8 @@ export type {
   ScenarioPlan,
 } from './assert/plan.js';
 export { renderCase, TEMPLATE_NOTES } from './assert/templates.js';
+export { chooseStrategies, chooseStrategy, STRATEGY_RULES_VERSION } from './strategy.js';
+export type { Strategy, StrategyChoice } from './strategy.js';
 export { checkExpression, paramName, renderValue, replacePlaceholders } from './assert/expr.js';
 
 /** C3's version, written as producer.tool_version in every contract file. */
@@ -76,7 +79,8 @@ export const WORK_DIR = 'c3/work';
 /**
  * Runnable Test Generation with Explainable Assertions and Mocking.
  * Done so far: C3-03 input reader, C3-04 dependency scan, C3-05 rule-based mock decisions,
- * C3-06 model client, C3-07 mock behaviour from the Given/When steps, C3-08 typed assertions.
+ * C3-06 model client, C3-07 mock behaviour from the Given/When steps, C3-08 typed assertions,
+ * C3-09 strategy selection.
  */
 export async function run(
   options: RunOptions & { generatedAt?: string; model?: ModelClient },
@@ -152,6 +156,13 @@ export async function run(
     );
     const plans = await planAssertions(contexts, options.model, { log: (l) => console.log(l) });
     writeJson(path.join(options.out, WORK_DIR, 'assertion_plan.json'), plans);
+
+    // C3-09: test strategy per scenario (rules) -> c3/work/strategy.json
+    const strategies = chooseStrategies(inputs.scenarios);
+    writeJson(path.join(options.out, WORK_DIR, 'strategy.json'), strategies);
+    console.log(`[c3] strategy (rules ${strategies.rules_version}):`);
+    for (const c of strategies.choices)
+      console.log(`  ${c.scenario_id} ${c.strategy} (${c.rule_id}): ${c.reason}`);
   }
 }
 
