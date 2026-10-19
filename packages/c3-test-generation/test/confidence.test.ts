@@ -37,9 +37,7 @@ const A1 = {
 /** Compiles and runs, but invents a value (not in any step) and uses a category the Then step contradicts. */
 const INVENTED1 = {
   act: 'registerUser({ age: 30, email: "amal@example.com" })',
-  assertions: [
-    { then: 'T1', category: 'equality', actual: 'result.email', expected: 'admin@site.org' },
-  ],
+  assertions: [{ then: 'T1', category: 'equality', actual: 'result.age', expected: 31 }],
 };
 const A2 = {
   act: 'registerUser({ age: <age>, email: "test@example.com" })',
@@ -155,7 +153,7 @@ describe('C3-13 routing on the golden example', () => {
         'test.todo("[SCN-EX-001-01][STB-EX-001-01] Register a user with a valid age :: Confidence',
       );
       expect(stub).toContain('//   Then the user is saved with age 30');
-      expect(stub).toContain('//   expect(result.email).toBe("admin@site.org");'); // the draft for a human
+      expect(stub).toContain('//   expect(result.age).toBe(31);'); // the draft for a human
       expect(r.text('c3/runnable_tests/REQ-EX-001.test.js')).not.toContain('SCN-EX-001-01');
       expect(r.validate.status).toBe(0);
     } finally {

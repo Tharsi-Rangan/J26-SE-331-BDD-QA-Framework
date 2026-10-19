@@ -126,6 +126,15 @@ describe('C3-08 expression helpers', () => {
     expect(checkExpression('process.exit(1)', new Set()).problems.join()).toMatch(/process/);
   });
 
+  test('C3-14 pilot: the call of a returned function keeps the export as its callee', () => {
+    const c = checkExpression('compileTrust(2)("10.0.0.1", 0)', new Set(['compileTrust']));
+    expect(c.ok).toBe(true);
+    expect(c.callee).toBe('compileTrust');
+    expect(checkExpression('compileETag(true)', new Set(['compileETag'])).callee).toBe(
+      'compileETag',
+    );
+  });
+
   test('renderValue keeps JSON literals and turns "<col>" into the parameter', () => {
     const p = new Map([['age', 'age']]);
     expect(renderValue({ age: '<age>', email: 'a@b.c' }, p)).toBe('{ age: age, email: "a@b.c" }');
@@ -544,7 +553,7 @@ describe('C3-08 templates run against the golden registerUser', () => {
       'expect(result).toBe("a");',
       'expect(result.list).toEqual([1, 2]);',
       'expect(result.ok).toBeFalsy();',
-      'expect(result.err).toBeNull();',
+      'expect(result.err ?? null).toBeNull();',
       'expect(result.n).toBeGreaterThan(1);',
       'expect(result.n).toBeLessThanOrEqual(5);',
     ]);

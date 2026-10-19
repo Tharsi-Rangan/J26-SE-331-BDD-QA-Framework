@@ -391,6 +391,7 @@ export function scanModule(
     line: e.node.getStartLineNumber(),
     dependencies: reach(e.node),
     ...exportShape(e.node),
+    ...docOf(e.node),
   }));
   for (const name of options.expectedExports ?? []) {
     if (!exportsByName.has(name))
@@ -593,6 +594,51 @@ function moduleExportName(right: Node, value: Node): string {
 }
 
 /** C3-08: kind, parameter list and async flag of an exported value. */
+/** Tags kept from a JSDoc comment: the ones that describe the interface, not visibility or build hints. */
+const DOC_TAGS = /^@(param|arg|argument|returns?|throws|exception)\b/;
+
+/**
+ * C3-14: the JSDoc comment written just before the export's statement, cleaned to its description and
+ * interface tags. `exports.x = function` -> the comment above the assignment; `function f` -> above f.
+ */
+export function docOf(node: Node): Pick<ScannedExport, 'doc'> {
+  let st: Node | undefined = node;
+  while (
+    st &&
+    !Node.isExpressionStatement(st) &&
+    !Node.isFunctionDeclaration(st) &&
+    !Node.isClassDeclaration(st) &&
+    !Node.isVariableStatement(st) &&
+    !Node.isExportAssignment(st) &&
+    !Node.isPropertyAssignment(st) &&
+    !Node.isMethodDeclaration(st)
+  ) {
+    st = st.getParent();
+  }
+  if (!st) return {};
+  const comments = st.getLeadingCommentRanges().map((r) => r.getText());
+  const jsdoc = [...comments].reverse().find((c) => c.startsWith('/**'));
+  if (!jsdoc) return {};
+  const lines = jsdoc
+    .replace(/^\/\*\*/, '')
+    .replace(/\*\/$/, '')
+    .split(/\r?\n/)
+    .map((l) => l.replace(/^\s*\*\s?/, '').trim())
+    .filter(Boolean);
+  const kept: string[] = [];
+  let inTag = false;
+  for (const l of lines) {
+    if (l.startsWith('@')) {
+      inTag = DOC_TAGS.test(l);
+      if (inTag) kept.push(l.replace(/\s+/g, ' '));
+    } else if (!inTag) {
+      kept.push(l);
+    }
+  }
+  const doc = kept.join(' | ').slice(0, 500);
+  return doc ? { doc } : {};
+}
+
 function exportShape(node: Node): Pick<ScannedExport, 'valueKind' | 'params' | 'isAsync'> {
   if (
     Node.isFunctionDeclaration(node) ||

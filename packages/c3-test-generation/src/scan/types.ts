@@ -45,6 +45,11 @@ export interface ScannedExport {
   params?: string[];
   /** C3-08: declared `async` (the test must await it). */
   isAsync?: boolean;
+  /**
+   * C3-14: the export's documentation comment (JSDoc description, @param, @return/@returns, @throws), so the
+   * model knows the documented shape of the result (e.g. "@return {Function}"). Documentation only, never code.
+   */
+  doc?: string;
 }
 
 export interface ModuleScan {

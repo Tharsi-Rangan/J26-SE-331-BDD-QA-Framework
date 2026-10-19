@@ -33,10 +33,10 @@ const GOOD1 = {
     { then: 'T1', category: 'equality', actual: 'result.age', expected: 30 },
   ],
 };
-/** Passes every slot check, but result.profile is undefined, so the TypeError is raised in the test code. */
+/** Passes every slot check, but a number has no trim(), so the TypeError is raised in the test code. */
 const BROKEN1 = {
   ...GOOD1,
-  assertions: [{ then: 'T1', category: 'equality', actual: 'result.profile.age', expected: 30 }],
+  assertions: [{ then: 'T1', category: 'equality', actual: 'result.age.trim()', expected: '30' }],
 };
 const A2 = {
   act: 'registerUser({ age: <age>, email: "test@example.com" })',
@@ -99,9 +99,7 @@ describe('C3-12 repair loop', () => {
       answer: 'usable',
       fixed: true,
     });
-    expect(r.log.entries[0].errors.join()).toMatch(
-      /Cannot read properties of undefined \(reading 'age'\)/,
-    );
+    expect(r.log.entries[0].errors.join()).toMatch(/result\.age\.trim is not a function/);
     expect(r.verification.tests.every((t) => t.run === 'passed')).toBe(true);
     const rounds = Object.fromEntries(
       r.manifest.tests.map((t: any) => [t.test_id, t.repair_rounds]),
@@ -110,7 +108,7 @@ describe('C3-12 repair loop', () => {
     expect(rounds['TST-EX-001-02-01']).toBe(0);
     // the repair call carried the previous answer and the error
     const call = m.calls.find((c) => c.purpose?.startsWith('C3-12 repair 1'))!;
-    expect(call.messages.at(-2)!.content).toContain('result.profile.age');
+    expect(call.messages.at(-2)!.content).toContain('result.age.trim()');
     expect(call.messages.at(-1)!.content).toMatch(/The error comes from the test itself/);
   });
 
