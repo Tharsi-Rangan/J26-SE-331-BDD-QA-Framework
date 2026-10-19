@@ -260,6 +260,12 @@ Fix-4, from Qwen run 2 (14 tests, 6 false alarms, 1 stub). Five more generic cau
 | A Then step with `<kind>` but one assertion for every row (the `none` row) | Rule 11 + check: use `"<kind>"` or `when` on that column (`thenColumns`) |
 | A When-step `<hop>` missing from the act; a list value passed split up was wrongly rejected | Placeholders of Given/When steps must reach the act; `"a, b"` counts as used when every part is in the act |
 
+Fix-5, from the control run (golden example, prompt 0.6.0): Qwen wrote `expect(result).toBe("accepted")` for the
+accepted rows. The checks rightly refused it (it would fail on correct code), but two messages misled the retry.
+Now Examples cells count as stated values, an outcome label used as the return value is named as such and rule 5
+is given when a mocked dependency exists (`outcomeLabel`), and `"actual": "<result>"` gets a clear message instead
+of a parser error. The prompt text did not change (still 0.6.0); only the checks and retry messages did.
+
 When the requirement does not say what shape the result has, C3 takes the shape from the documented
 interface. If there is no documentation either, the answer cannot pass the checks and the scenario is a stub
 with the reason, never a guessed test.

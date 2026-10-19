@@ -3,15 +3,20 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 import {
   assertionPrompt,
   checkAssertionAnswer,
   inventedResultFields,
+  outcomeLabel,
   planContext,
+  ungroundedStrings,
   unquoteValue,
   unusedStepValues,
 } from '../src/assert/plan.js';
+import { readC3Inputs } from '../src/input/reader.js';
+import { buildMockDecisions } from '../src/mock/decisions.js';
 import { renderCase } from '../src/assert/templates.js';
 import { renderValue } from '../src/assert/expr.js';
 import type { C3ScenarioInput, ExampleRow, ScenarioStep } from '../src/input/types.js';
@@ -406,5 +411,86 @@ describe('C3-14 fix-4: the false alarms of run 2', () => {
     expect(renderCase(plan as never, c.cases[0]!).join('\n')).toContain(
       `expect(result).toMatchObject(${renderValue({ value: 'text/html', quality: 0.5 }, new Map())});`,
     );
+  });
+});
+
+// ---------------------------------------------------------------- fix-5 (control run: golden outline stubbed)
+
+describe('C3-14 fix-5: the control run (golden example, Qwen prompt 0.6.0)', () => {
+  const GOLDEN = fileURLToPath(
+    new URL('../../contracts/fixtures/golden/example-registration', import.meta.url),
+  );
+  const ctx = () => {
+    const inputs = readC3Inputs(GOLDEN);
+    const s = inputs.scenarios[0]!.subject;
+    const scan = scanModule(path.join(GOLDEN, 'subject-src'), s.modulePath);
+    const { file, targets } = buildMockDecisions(
+      inputs,
+      new Map([[`${s.subjectId}|${s.modulePath}`, scan]]),
+      { generatedAt: '2026-10-19T10:00:00+05:30' },
+    );
+    const sc = inputs.scenarios[1]!;
+    return planContext(sc, scan.exports, targets.get(sc.scenarioId)!.exports, file);
+  };
+  const row = (age: string, rest: object) => ({
+    then: 'T1',
+    when: { column: 'age', equals: age },
+    ...rest,
+  });
+  const refused = { category: 'exception', error: 'ValidationError', message: null };
+  const act = 'registerUser({ age: <age>, email: "test@example.com" })';
+
+  test('Examples cells are stated values: "accepted" is no longer called invented', () => {
+    const c = ctx();
+    expect(ungroundedStrings('accepted', 'result', c.sc)).toEqual([]);
+    expect(ungroundedStrings('approved', 'result', c.sc)).toEqual(['approved']);
+  });
+
+  test('attempt 1: result == "accepted" is named as an outcome label and rule 5 is given', () => {
+    const attempt1 = {
+      act,
+      assertions: [
+        row('17', refused),
+        row('18', { category: 'equality', actual: 'result', expected: 'accepted' }),
+        row('66', refused),
+      ],
+    };
+    const p = checkAssertionAnswer(attempt1, ctx()).problems.join('\n');
+    expect(p).toMatch(
+      /"accepted" is an outcome label from the Examples column result, not what registerUser returns.*userRepository\.save was called \(state_change\).*rules 2, 5/,
+    );
+    expect(p).not.toMatch(/which no step states/);
+  });
+
+  test('attempt 2: "actual": "<result>" gets a clear message, not a parser error', () => {
+    const attempt2 = {
+      act,
+      assertions: [row('18', { category: 'equality', actual: '<result>', expected: 'accepted' })],
+    };
+    const p = checkAssertionAnswer(attempt2, ctx()).problems.join('\n');
+    expect(p).toMatch(/"actual" is what the call returns.*<column> values belong in "expected"/);
+    expect(p).not.toMatch(/JSX/);
+  });
+
+  test('the answer rule 5 asks for passes: exception when rejected, save called when accepted', () => {
+    const good = {
+      act,
+      assertions: [
+        { then: 'T1', when: { column: 'result', equals: 'rejected' }, ...refused },
+        {
+          then: 'T1',
+          when: { column: 'result', equals: 'accepted' },
+          category: 'state_change',
+          target: 'userRepository.save',
+          change: 'called',
+        },
+      ],
+    };
+    expect(checkAssertionAnswer(good, ctx()).problems).toEqual([]);
+  });
+
+  test('without a mocked dependency a label may be a real return value (no outcome-label message)', () => {
+    const c = { ...ctx(), mocks: [] };
+    expect(outcomeLabel('accepted', 'result', c.sc, c)).toBeUndefined();
   });
 });

@@ -391,6 +391,14 @@ export function checkAssertionAnswer(raw: RawAnswer, ctx: PlanContext): CheckedA
 
       const checkActual = () => {
         const actual = typeof a.actual === 'string' && a.actual.trim() ? a.actual.trim() : 'result';
+        // C3-14 control run: "actual": "<result>" gave a confusing parser error; say what is wrong
+        if (/<[^<>]+>/.test(actual)) {
+          problems.push(
+            `${where}: "actual" is what the call returns (result or a part of it); <column> values belong in "expected", not in "actual"`,
+          );
+          slot.actual = 'result';
+          return;
+        }
         const c = checkExpression(actual, new Set(['result', ...ctx.params.values()]));
         problems.push(...c.problems.map((p) => `${where} "actual": ${p}`));
         if (c.ok && !c.identifiers.includes('result'))
@@ -423,6 +431,12 @@ export function checkAssertionAnswer(raw: RawAnswer, ctx: PlanContext): CheckedA
         if (ungrounded.length)
           problems.push(
             `${where}: "expected" has ${ungrounded.map((u) => `"${u}"`).join(', ')}, which no step states; use only values from the steps (rules 1, 10)`,
+          );
+        // C3-14 control run: "accepted" is an outcome label of the Examples table, not a return value
+        const label = outcomeLabel(slot.expected, slot.actual ?? 'result', sc, ctx);
+        if (label)
+          problems.push(
+            `${where}: "${label.value}" is an outcome label from the Examples column ${label.column}, not what ${ctx.targets.join(' or ')} returns; for this row check what happens instead: an exception when it is refused, or that ${ctx.mocks.map((m) => m.target).join(' or ')} was called (state_change) when it succeeds (rules 2, 5)`,
           );
         // C3-14 run 2: keys of an expected object are field names too (rule 8)
         if (isObj(slot.expected)) {
@@ -588,7 +602,9 @@ export function ungroundedStrings(
   actual: string,
   sc: C3ScenarioInput,
 ): string[] {
-  const text = stepText(sc).toLowerCase();
+  // the Examples table is part of the scenario: its cells are stated values too
+  const cells = sc.examples.flatMap((r) => Object.values(r.values));
+  const text = `${stepText(sc)} ${cells.join(' ')}`.toLowerCase();
   const out: string[] = [];
   const walk = (v: unknown) => {
     if (Array.isArray(v)) v.forEach(walk);
@@ -601,6 +617,30 @@ export function ungroundedStrings(
   };
   walk(expected);
   return out;
+}
+
+/**
+ * C3-14 control run: result compared with a value of a Then-step column ("accepted", "<result>") when a mocked
+ * dependency exists. Such a column says what happens (refused / saved), so rule 5 applies: success is shown by
+ * the call to the mock, not by result equal to the label. Without a mock the label may be a real return value
+ * (a grade "A"), so nothing is said then.
+ */
+export function outcomeLabel(
+  expected: unknown,
+  actual: string,
+  sc: C3ScenarioInput,
+  ctx: PlanContext,
+): { value: string; column: string } | undefined {
+  if (!sc.isOutline || !ctx.mocks.length || actual.trim() !== 'result') return undefined;
+  if (typeof expected !== 'string') return undefined;
+  for (const cols of thenColumns(sc, ctx).values()) {
+    for (const col of cols) {
+      if (expected === `<${col}>`) return { value: expected, column: col };
+      const vals = (ctx.columnValues.get(col) ?? []).map((v) => v.toLowerCase());
+      if (vals.includes(expected.toLowerCase())) return { value: expected, column: col };
+    }
+  }
+  return undefined;
 }
 
 /** The type in "@return {Object}" of the function under test, when it is not a plain value. */
