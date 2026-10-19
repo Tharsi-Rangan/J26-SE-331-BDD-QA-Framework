@@ -15,7 +15,7 @@ describe('orch parseRunArgs', () => {
     expect(() => parseRunArgs(['--out', 'x'])).toThrow(/Usage/);
   });
 
-  test('rejects a missing --out', () => {
-    expect(() => parseRunArgs(['run'])).toThrow(/--out/);
+  test('--out is optional (a new run id is made)', () => {
+    expect(parseRunArgs(['run']).out).toBeUndefined();
   });
 });
