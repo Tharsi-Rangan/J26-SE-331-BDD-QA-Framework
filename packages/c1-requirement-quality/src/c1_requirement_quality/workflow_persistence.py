@@ -18,6 +18,7 @@ from c1_requirement_quality.source_integrity import sha256, verify_source
 from c1_requirement_quality.validation_lifecycle import original_assessments, clarification_resolution, validation_signature
 
 WORKFLOW_FILE = "workflow_snapshot.json"
+MAX_SNAPSHOT_ANCESTORS = 1024
 STATUSES = {"OPEN", "ANSWERED", "REOPENED", "CLOSED"}
 BASE_FIELDS = {"requirement_id", "clarification_questions", "clarification_answers",
                "candidate_texts", "selected_candidate_id", "selected_candidate_text",
@@ -683,15 +684,76 @@ def _validate_state(state: dict[str, Any], artifact: dict[str, Any], manifest: d
                 raise ValueError("Current validation signature or artifact mismatch")
 
 
+def _ancestry_identity(manifest, state):
+    from c1_requirement_quality.rag.candidate_validation import _canonical
+    return {"snapshot_id": state["snapshot_id"],
+            "artifact_sha256": manifest["artifact_sha256"],
+            "workflow_sha256": manifest["workflow_sha256"],
+            "manifest_sha256": sha256(_canonical(manifest)),
+            "source_identity": {k: manifest[k] for k in
+                                ("document_id", "sha256", "normalized_sha256")},
+            "rag_provenance_sha256": manifest["rag_provenance_sha256"],
+            "rag_diagnostics_sha256": manifest["rag_diagnostics_sha256"]}
+
+
+def _initial_rag_transition(manifest, state):
+    from c1_requirement_quality.rag.candidate_validation import verification_policy
+    identity = _ancestry_identity(manifest, state)
+    prior = state.get("initial_rag_ancestry")
+    return {"version": 1, "purpose": "historical-initial-rag-ancestry",
+            "parent": identity, "root": copy.deepcopy(prior["root"] if prior else identity),
+            "verification_policy": verification_policy()}
+
+
+def _reject_ancestry_reparse(path):
+    for part in (path, *path.parents):
+        if part.is_symlink() or (part.exists() and getattr(part.lstat(), "st_file_attributes", 0)
+                                & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)):
+            raise ValueError("Unsafe initial RAG ancestor symlink/reparse path")
+
+
+def build_initial_rag_ancestry(parent_context):
+    """Describe a verified parent for staging; this never authorizes publication.
+
+    Only identities are carried forward. Original diagnostics and candidate
+    archives stay at their original snapshots and retain their original scope.
+    """
+    from c1_requirement_quality.source_integrity import resolve_workflow_policy
+    rag, _, manifest, state = resolve_workflow_policy(parent_context)
+    if not rag:
+        return None
+    if manifest.get("workflow_sha256") is None:
+        raise ValueError("Sealed initial RAG workflow required")
+    return _initial_rag_transition(manifest, state)
+
+
+def verify_initial_rag_ancestry(input_path: Path, source: Path):
+    """Audit the complete sealed lineage without constructing a DemoSession."""
+    state, manifest = load_state(input_path, source)
+    if manifest.get("rag_policy") != "c1-initial-rag-v1":
+        raise ValueError("Initial RAG ancestry required")
+    ancestry = state.get("initial_rag_ancestry")
+    return {"version": 1, "purpose": "historical-initial-rag-ancestry",
+            "snapshot_id": state["snapshot_id"], "generations": state["round"],
+            "root": copy.deepcopy(ancestry["root"] if ancestry else _ancestry_identity(manifest, state)),
+            "candidate_evidence_verified": False,
+            "child_independently_validated": False, "approval_authorized": False,
+            "publication_authorized": False, "bdd_ready_authorized": False}
+
+
 def load_state(input_path: Path, source: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     """Verify the complete parent chain, hashes, identity and cumulative history."""
     current = input_path.resolve(); seen_paths: set[Path] = set(); seen_ids: set[str] = set()
+    from c1_requirement_quality.source_integrity import _verify_source_local
+    from c1_requirement_quality.rag.candidate_validation import _canonical
     child: dict[str, Any] | None = None; result = None; first_manifest = None
+    child_manifest = None
     while True:
         if current in seen_paths: raise ValueError("Snapshot lineage cycle")
+        if len(seen_paths) >= MAX_SNAPSHOT_ANCESTORS:
+            raise ValueError(f"Snapshot ancestry exceeds verification limit ({MAX_SNAPSHOT_ANCESTORS})")
         seen_paths.add(current)
-        original_source_text, manifest = verify_source(current, source)
-        artifact = json.loads(current.read_text(encoding="utf-8-sig"))
+        original_source_text, manifest, artifact = _verify_source_local(current, source)
         path = current.parent / "internal" / WORKFLOW_FILE
         expected_hash = manifest.get("workflow_sha256")
         if expected_hash is None:
@@ -718,6 +780,23 @@ def load_state(input_path: Path, source: Path) -> tuple[dict[str, Any], dict[str
             _validate_state(state, artifact, manifest, original_source_text)
         if state["snapshot_id"] in seen_ids: raise ValueError("Repeated snapshot identity in lineage")
         seen_ids.add(state["snapshot_id"])
+        descendant = "rag_ancestry_version" in manifest
+        if descendant or (first_manifest and "rag_ancestry_version" in first_manifest):
+            for checked in (input_path if result is None else current,
+                            path, current.parent / "internal/source_manifest.json",
+                            current.parent / "internal" / manifest["archived_source"],
+                            current.parent / "internal/normalized_ingestion.json",
+                            current.parent / "internal/rag_provenance.json",
+                            current.parent / "rag_diagnostics.json"):
+                _reject_ancestry_reparse(checked)
+        if descendant != ("initial_rag_ancestry" in state):
+            raise ValueError("Initial RAG ancestry manifest/workflow mismatch")
+        if descendant and (state.get("parent") is None or any(
+                r.get("bdd_ready") or r.get("human_decision") in {"approved", "edited"}
+                for r in artifact["requirements"])):
+            raise ValueError("Initial RAG descendant authorization remains blocked")
+        if manifest.get("rag_policy") and not descendant and state.get("parent") is not None:
+            raise ValueError("Initial RAG descendant ancestry missing")
         if child is not None:
             reference = child["parent"]
             if (reference["snapshot_id"] != state["snapshot_id"] or reference["artifact_sha256"] != manifest["artifact_sha256"]
@@ -725,6 +804,14 @@ def load_state(input_path: Path, source: Path) -> tuple[dict[str, Any], dict[str
                     or reference.get("legacy_diagnostics_sha256") != state.get("legacy_diagnostics_sha256")
                     or child["source_identity"] != state["source_identity"]):
                 raise ValueError("Parent snapshot reference mismatch")
+            if manifest.get("rag_policy") or child_manifest.get("rag_policy"):
+                if (manifest.get("rag_policy") != "c1-initial-rag-v1"
+                        or child_manifest.get("rag_policy") != manifest["rag_policy"]
+                        or child_manifest.get("rag_ancestry_version") != 1
+                        or _canonical(child.get("initial_rag_ancestry")) != _canonical(_initial_rag_transition(manifest, state))
+                        or any(child_manifest.get(k) != manifest.get(k) for k in
+                               ("rag_provenance_sha256", "rag_diagnostics_sha256"))):
+                    raise ValueError("Initial RAG ancestry transition mismatch")
             if expected_hash is not None:
                 if child["events"][:len(state["events"])] != state["events"]:
                     raise ValueError("Cumulative event history does not preserve its parent")
@@ -755,7 +842,14 @@ def load_state(input_path: Path, source: Path) -> tuple[dict[str, Any], dict[str
         location = parent.get("artifact_path")
         if not isinstance(location, str) or Path(location).is_absolute() or "\\" in location:
             raise ValueError("Parent artifact path must be relative with forward slashes")
-        child, current = state, (current.parent / location).resolve()
+        if descendant and (":" in location or location.startswith("/")):
+            raise ValueError("Unsafe initial RAG ancestor path")
+        next_path = current.parent / location
+        if descendant:
+            # Resolve only after rejecting links/reparse points, including at
+            # ancestor directories; relative '..' remains needed for siblings.
+            _reject_ancestry_reparse(next_path)
+        child, child_manifest, current = state, manifest, next_path.resolve()
         if not current.is_file(): raise ValueError("Parent snapshot artifact is missing")
     if any(event["snapshot_id"] not in seen_ids or event["requirement_id"] not in result["requirements"] for event in result["events"]):
         raise ValueError("Event references an unknown snapshot or requirement")

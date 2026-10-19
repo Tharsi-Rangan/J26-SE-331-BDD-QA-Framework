@@ -26,13 +26,10 @@ def resolve_workflow_policy(context, *, artifact=None, source_text=None):
     """Resolve policy only from sealed source/workflow provenance on every call."""
     if not isinstance(context, VerifiedWorkflowContext):
         raise ValueError("Verified workflow context required; provenance is unknown")
-    text, manifest = verify_source(context.input_path, context.source)
-    from c1_requirement_quality.workflow_persistence import load_state
+    text, manifest, current, state = _verify_snapshot(context.input_path, context.source)
     from c1_requirement_quality.contract import validate_contract_artifact
-    state, current_manifest = load_state(context.input_path, context.source)
-    current = json.loads(context.input_path.read_text(encoding="utf-8-sig"))
     validate_contract_artifact(current)
-    if current_manifest != manifest or (artifact is not None and artifact != current):
+    if artifact is not None and artifact != current:
         raise ValueError("Workflow provenance or parent artifact mismatch")
     rag = "rag_policy" in manifest
     if not rag and any((context.input_path.parent / name).exists() for name in
@@ -105,7 +102,33 @@ def seal_source(c1_dir: Path, manifest: dict[str, Any]) -> None:
 
 
 def verify_source(input_path: Path, supplied_source: Path) -> tuple[str, dict[str, Any]]:
-    """Fail closed on legacy artifacts, changed supplied bytes or altered archives."""
+    """Verify local bytes and, for descendants, the complete initial RAG chain."""
+    text, manifest, _, _ = _verify_snapshot(input_path, supplied_source)
+    return text, manifest
+
+
+def _verify_snapshot(input_path: Path, supplied_source: Path):
+    """Return authenticated artifact content and its fully verified workflow.
+
+    Always traverse the workflow: removable manifest markers cannot select a
+    weaker verification path. load_state uses only the local primitive below,
+    so the ancestry walk stays iterative. The artifact returned here was parsed
+    from the exact bytes checked against the retained manifest identity.
+    """
+    text, manifest, artifact = _verify_source_local(input_path, supplied_source)
+    from c1_requirement_quality.workflow_persistence import load_state
+    state, verified_manifest = load_state(input_path, supplied_source)
+    if verified_manifest != manifest:
+        raise ValueError("Workflow provenance or ancestry changed during verification")
+    return text, manifest, artifact, state
+
+
+def _verify_source_local(input_path: Path, supplied_source: Path):
+    """Authenticate local bytes only; descendants also require load_state().
+
+    Return the artifact parsed from those exact bytes. This private primitive
+    lets the iterative lineage loader avoid recursive public verification.
+    """
     internal = input_path.parent / "internal"
     manifest_path = internal / "source_manifest.json"
     if not manifest_path.is_file():
@@ -117,7 +140,8 @@ def verify_source(input_path: Path, supplied_source: Path) -> tuple[str, dict[st
             or manifest.get("archived_source") != f"source/{filename}"
             or manifest.get("normalized_ingestion") != "normalized_ingestion.json"):
         raise ValueError("Invalid source integrity manifest")
-    if sha256(input_path.read_bytes()) != manifest["artifact_sha256"]:
+    artifact_raw = input_path.read_bytes()
+    if sha256(artifact_raw) != manifest["artifact_sha256"]:
         raise ValueError("Input artifact hash does not match source integrity manifest")
     archived = internal / "source" / filename
     for path in (archived, supplied_source):
@@ -126,14 +150,27 @@ def verify_source(input_path: Path, supplied_source: Path) -> tuple[str, dict[st
     normalized = (internal / "normalized_ingestion.json").read_bytes()
     if sha256(normalized) != manifest["normalized_sha256"]:
         raise ValueError("Normalized ingestion hash mismatch")
-    if "rag_policy" in manifest:
+    descendant = "rag_ancestry_version" in manifest
+    # Optional diagnostics do not declare mandatory RAG. The dedicated initial
+    # provenance file does, including when a root's policy marker was removed.
+    if "rag_policy" not in manifest and (internal / "rag_provenance.json").exists():
+        raise ValueError("RAG provenance exists without its mandatory manifest policy")
+    if descendant and (type(manifest["rag_ancestry_version"]) is not int
+                       or manifest["rag_ancestry_version"] != 1
+                       or manifest.get("rag_policy") != "c1-initial-rag-v1"
+                       or "workflow_sha256" not in manifest):
+        raise ValueError("Invalid initial RAG descendant manifest")
+    if "rag_policy" in manifest and not descendant:
         if manifest["rag_policy"] != "c1-initial-rag-v1":
             raise ValueError("Unsupported RAG grounding policy")
+        verified_rag = {}
         for relative, key in (("internal/rag_provenance.json", "rag_provenance_sha256"),
                               ("rag_diagnostics.json", "rag_diagnostics_sha256")):
-            if sha256((input_path.parent / relative).read_bytes()) != manifest.get(key):
+            raw = (input_path.parent / relative).read_bytes()
+            if sha256(raw) != manifest.get(key):
                 raise ValueError("RAG provenance or diagnostics hash mismatch")
-        provenance = json.loads((internal / "rag_provenance.json").read_text(encoding="utf-8"))
+            verified_rag[key] = raw
+        provenance = json.loads(verified_rag["rag_provenance_sha256"])
         if (provenance.get("status") != "completed" or provenance.get("policy") != manifest["rag_policy"]
                 or provenance.get("input_sha256") != manifest["artifact_sha256"]
                 or provenance.get("source_sha256") != manifest["sha256"]
@@ -143,11 +180,11 @@ def verify_source(input_path: Path, supplied_source: Path) -> tuple[str, dict[st
         workflow = internal / "workflow_snapshot.json"
         if not workflow.is_file() or sha256(workflow.read_bytes()) != manifest["workflow_sha256"]:
             raise ValueError("Workflow snapshot hash mismatch")
-    artifact = json.loads(input_path.read_text(encoding="utf-8-sig"))
+    artifact = json.loads(artifact_raw.decode("utf-8-sig"))
     if artifact.get("source_document", {}).get("name") != filename:
         raise ValueError("Artifact source filename does not match its manifest")
     payload = json.loads(normalized.decode("utf-8"))
-    return payload["raw_text"], manifest
+    return payload["raw_text"], manifest, artifact
 
 
 def require_refinement_grounding(manifest: dict[str, Any]) -> None:
@@ -159,6 +196,13 @@ def require_refinement_grounding(manifest: dict[str, Any]) -> None:
 def copy_source_bundle(input_path: Path, c1_dir: Path, manifest: dict[str, Any],
                        workflow_state: dict[str, Any] | None = None) -> None:
     """Carry original bytes/NIR unchanged to the new refinement snapshot."""
+    if manifest.get("rag_policy"):
+        from c1_requirement_quality.workflow_persistence import build_initial_rag_ancestry
+        expected = build_initial_rag_ancestry(VerifiedWorkflowContext(
+            input_path, input_path.parent / "internal" / manifest["archived_source"]))
+        if workflow_state is None or workflow_state.get("initial_rag_ancestry") != expected:
+            raise ValueError("Verified initial RAG ancestry required for staged descendant")
+        manifest = dict(manifest, rag_ancestry_version=1)
     old = input_path.parent / "internal"
     target = c1_dir / "internal"
     (target / "source").mkdir(parents=True)

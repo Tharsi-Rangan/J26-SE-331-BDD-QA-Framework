@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 from contextlib import contextmanager
 
-from c1_requirement_quality.source_integrity import verify_source
+from c1_requirement_quality.source_integrity import verify_source, _verify_snapshot
 from c1_requirement_quality.workflow_persistence import load_state
 from c1_requirement_quality.refinement import stable_candidate_id, _evaluate_candidate, _consistency_with_candidate, _candidate_validation
 from c1_requirement_quality.tier_classifier import classify_tier
@@ -103,10 +103,9 @@ class DemoSession:
             artifact = artifact.resolve()
             manifest = json.loads((artifact.parent / "internal/source_manifest.json").read_text(encoding="utf-8"))
             source = source.resolve() if source else artifact.parent / "internal" / manifest["archived_source"]
-            verify_source(artifact, source)
-            load_state(artifact, source)
-            cli._validate_contract_artifact(json.loads(artifact.read_text(encoding="utf-8-sig")))
-            initial_hash = _hash(artifact.read_bytes())
+            _, manifest, data, _ = _verify_snapshot(artifact, source)
+            cli._validate_contract_artifact(data)
+            initial_hash = manifest["artifact_sha256"]
         else:
             if source is None or registry is None or run_id is None:
                 raise ValueError("New analysis requires --srs, --registry and --run-id")
@@ -144,10 +143,10 @@ class DemoSession:
                 from c1_requirement_quality.ml.ml_diagnostics import defect_diagnostics_run
                 sidecar = workspace / "sidecars/initial-defect-predictions.json"
                 defect_diagnostics_run(artifact, sidecar, classifier=classifier)
-                data = json.loads(artifact.read_text(encoding="utf-8"))
-                _, digest = _load_diagnostics(sidecar, data, _hash(artifact.read_bytes()), "distilbert")
+                _, manifest, data, _ = _verify_snapshot(artifact, source)
+                _, digest = _load_diagnostics(sidecar, data, manifest["artifact_sha256"], "distilbert")
                 _write(workspace / "ml_analysis.json", {
-                    "status": "completed", "input_sha256": _hash(artifact.read_bytes()),
+                    "status": "completed", "input_sha256": manifest["artifact_sha256"],
                     "sidecar_sha256": digest,
                 })
             except Exception as error:
@@ -269,12 +268,10 @@ class DemoSession:
         from c1_requirement_quality.contract import validate_contract_artifact as _validate_contract_artifact
         if _hash(self.source.read_bytes()) != self.meta["source_sha256"]:
             raise ValueError("Session SRS changed")
-        data = json.loads(self.current.read_text(encoding="utf-8-sig"))
+        text, manifest, data, state = _verify_snapshot(self.current, self.source)
         _validate_contract_artifact(data)
-        text, manifest = verify_source(self.current, self.source)
         if self.meta.get("mandatory_rag") and manifest.get("rag_policy") != "c1-initial-rag-v1":
             raise ValueError("Mandatory RAG grounding receipt missing")
-        state, _ = load_state(self.current, self.source)
         if self.meta.get("expected_run_id") and data["run_id"] != self.meta["expected_run_id"]:
             raise ValueError("Initial run identity mismatch")
         if self.meta.get("mandatory_ml"):
@@ -518,9 +515,7 @@ class DemoSession:
                 operation = next(e for e in self.events if e["kind"] == "pending"
                                  and e["operation_id"] == event["operation_id"])
                 artifact = Path(operation["out"]) / "c1/validated_requirements.json"
-                snapshot = json.loads(artifact.read_text(encoding="utf-8-sig"))
-                _, snapshot_manifest = verify_source(artifact, self.source)
-                snapshot_state, _ = load_state(artifact, self.source)
+                _, snapshot_manifest, snapshot, snapshot_state = _verify_snapshot(artifact, self.source)
                 views = {v["pair_id"]: v for v in pair_views(snapshot, snapshot_manifest, snapshot_state, [])}
                 for record in history:
                     view = views.get(record["pair_id"])
