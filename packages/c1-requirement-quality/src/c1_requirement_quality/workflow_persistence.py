@@ -63,6 +63,30 @@ def _candidate_snapshot_identity(manifest: dict[str, Any], state: dict[str, Any]
             "workflow_basis_sha256": sha256(_canonical(state))}
 
 
+def _read_candidate_reference(workspace: Path, event: dict[str, Any]) -> dict[str, Any]:
+    """Read a reference using the digest from an already verified journal event."""
+    raw = candidate_evidence_path(workspace, event["reference"]).read_bytes()
+    if sha256(raw) != event["reference_sha256"]:
+        raise ValueError("Candidate registry reference digest mismatch")
+    reference = json.loads(raw)
+    fields = {"registry_version", "parent_artifact_sha256", "snapshot_id", "evidence",
+              "requirement_id", "candidate_text", "receipt_sha256", "top_k", "candidate_id",
+              "binding", "models"}
+    if (not isinstance(reference, dict) or set(reference) != fields
+            or any(not isinstance(reference[key], str) for key in
+                   ("parent_artifact_sha256", "snapshot_id", "evidence", "requirement_id",
+                    "candidate_text", "receipt_sha256", "candidate_id"))
+            or reference.get("registry_version") != 1
+            or reference.get("parent_artifact_sha256") != event["artifact_sha256"]):
+        raise ValueError("Candidate registry identity mismatch")
+    identity = event["snapshot_identity"]
+    if (reference.get("snapshot_id") != identity["snapshot_id"]
+            or not isinstance(reference.get("binding"), dict)
+            or any(reference["binding"].get(key) != value for key, value in identity.items())):
+        raise ValueError("Candidate registry snapshot mismatch")
+    return reference
+
+
 def restore_candidate_receipts(workspace: Path, context, *, analyser_factory=None):
     """Use journal-retained digests, never a receipt read from evidence itself.
 
@@ -87,28 +111,10 @@ def restore_candidate_receipts(workspace: Path, context, *, analyser_factory=Non
     for event in session.events:
         if event["kind"] != "candidate_evidence_registered":
             continue
-        path = candidate_evidence_path(workspace, event["reference"])
-        raw = path.read_bytes()
-        if sha256(raw) != event["reference_sha256"]:
-            raise ValueError("Candidate registry reference digest mismatch")
-        reference = json.loads(raw)
-        fields = {"registry_version", "parent_artifact_sha256", "snapshot_id", "evidence",
-                  "requirement_id", "candidate_text", "receipt_sha256", "top_k", "candidate_id",
-                  "binding", "models"}
-        if (not isinstance(reference, dict) or set(reference) != fields
-                or any(not isinstance(reference[key], str) for key in
-                       ("parent_artifact_sha256", "snapshot_id", "evidence", "requirement_id",
-                        "candidate_text", "receipt_sha256", "candidate_id"))
-                or reference.get("registry_version") != 1
-                or reference.get("parent_artifact_sha256") != event["artifact_sha256"]):
-            raise ValueError("Candidate registry identity mismatch")
+        reference = _read_candidate_reference(workspace, event)
         # Replay verified this identity against the actual snapshot active at
         # registration, not just against a caller-provided snapshot identifier.
         identity = event["snapshot_identity"]
-        if (reference.get("snapshot_id") != identity["snapshot_id"]
-                or not isinstance(reference.get("binding"), dict)
-                or any(reference["binding"].get(key) != value for key, value in identity.items())):
-            raise ValueError("Candidate registry snapshot mismatch")
         # Equal artifact bytes need not mean equal clarification/workflow state.
         # Verified historical references remain audit data, never current evidence.
         if identity != current_identity:
@@ -131,6 +137,151 @@ def restore_candidate_receipts(workspace: Path, context, *, analyser_factory=Non
         receipts[cid] = (evidence, reference["receipt_sha256"])
     return CandidateGroundingContext(context.input_path, context.source, receipts,
                                     top_k or 5, factory)
+
+
+PARENT_EVIDENCE_PURPOSE = "historical-parent-bound-transition-evidence"
+
+
+def build_parent_evidence_links(parent_context, registry_workspace: Path, candidate_ids: list[str], *,
+                                analyser_factory=None) -> dict[str, Any]:
+    """Build metadata only, from independently anchored parent registrations.
+
+    No files are copied or published. Archive paths preserve the original relative
+    tree under the future child's C1 directory. The registry remains a required
+    independent trust anchor in this foundation; child metadata cannot self-authenticate.
+    """
+    from c1_requirement_quality.source_integrity import resolve_workflow_policy
+    from c1_requirement_quality.demo_workflow import DemoSession
+    from c1_requirement_quality.rag.candidate_validation import load_candidate_validation
+    from c1_requirement_quality.rag.rag_grounding_analyser import RAGGroundingAnalyser
+    _, _, manifest, state = resolve_workflow_policy(parent_context)
+    if (not isinstance(candidate_ids, list) or not candidate_ids
+            or any(not isinstance(cid, str) for cid in candidate_ids)
+            or len(set(candidate_ids)) != len(candidate_ids)):
+        raise ValueError("Nonempty unique candidate IDs required")
+    identity = _candidate_snapshot_identity(manifest, state)
+    # Replay verifies each registration against the snapshot actually active at
+    # that event, including historical parents after the session has advanced.
+    session = DemoSession(registry_workspace)
+    registered = {}
+    for event in session.events:
+        if event["kind"] != "candidate_evidence_registered":
+            continue
+        reference = _read_candidate_reference(registry_workspace, event)
+        if event["snapshot_identity"] != identity:
+            continue
+        cid = reference["candidate_id"]
+        if cid in registered:
+            raise ValueError("Duplicate parent evidence registration")
+        registered[cid] = (event, reference)
+    factory = analyser_factory or RAGGroundingAnalyser
+    links = []
+    for cid in candidate_ids:
+        if cid not in registered:
+            raise ValueError("Parent evidence has no trusted registration")
+        event, reference = registered[cid]
+        evidence = candidate_evidence_path(registry_workspace, reference["evidence"])
+        record = load_candidate_validation(evidence, parent_context.input_path, parent_context.source,
+            reference["requirement_id"], reference["candidate_text"],
+            expected_sha256=reference["receipt_sha256"], top_k=reference["top_k"], analyser_factory=factory)
+        if (record["binding"] != reference["binding"] or record["models"] != reference["models"]
+                or record["binding"]["candidate_id"] != cid):
+            raise ValueError("Parent evidence registration binding mismatch")
+        links.append({"binding": copy.deepcopy(record["binding"]), "candidate_text": record["candidate_text"],
+            "models": copy.deepcopy(record["models"]), "receipt_sha256": reference["receipt_sha256"],
+            "reference_sha256": event["reference_sha256"], "reference_path": event["reference"],
+            "evidence_path": reference["evidence"]})
+    return {"version": 1, "purpose": PARENT_EVIDENCE_PURPOSE, "links": links}
+
+
+def verify_child_evidence_links(child_path: Path, source: Path, *, registry_workspace: Path,
+                                analyser_factory=None) -> dict[str, Any]:
+    """Read sealed child metadata and verify P -> E -> C, never child approval.
+
+    Evidence is loaded against the immediate ORIGINAL parent, not the child.
+    The originating verified session journal is required; caller-supplied digests
+    or links are not accepted as a replacement. No inference or writes occur.
+    """
+    from c1_requirement_quality.source_integrity import VerifiedWorkflowContext, resolve_workflow_policy
+    from c1_requirement_quality.rag.candidate_validation import load_candidate_validation
+    from c1_requirement_quality.rag.rag_grounding_analyser import RAGGroundingAnalyser
+    child_context = VerifiedWorkflowContext(child_path, source)
+    _, _, manifest, state = resolve_workflow_policy(child_context)
+    parent = state.get("parent")
+    if not parent:
+        raise ValueError("Child evidence requires a verified immediate parent")
+    parent_path = (child_path.parent / parent["artifact_path"]).resolve()
+    parent_context = VerifiedWorkflowContext(parent_path, source)
+    # load_state above verified the full ancestry and parent reference hashes.
+    _, _, parent_manifest, _ = resolve_workflow_policy(parent_context)
+    if parent_manifest["artifact_sha256"] != parent["artifact_sha256"]:
+        raise ValueError("Parent artifact digest mismatch")
+    envelope = state.get("parent_evidence_links")
+    if (not isinstance(envelope, dict) or set(envelope) != {"version", "purpose", "links"}
+            or type(envelope["version"]) is not int or envelope["version"] != 1
+            or envelope["purpose"] != PARENT_EVIDENCE_PURPOSE
+            or not isinstance(envelope["links"], list) or not envelope["links"]):
+        raise ValueError("Invalid historical parent evidence-link envelope")
+    fields = {"binding", "candidate_text", "models", "receipt_sha256", "reference_sha256",
+              "reference_path", "evidence_path"}
+    ids, archive_paths = [], set()
+    for link in envelope["links"]:
+        if (not isinstance(link, dict) or set(link) != fields or not isinstance(link["binding"], dict)
+                or not isinstance(link["candidate_text"], str)):
+            raise ValueError("Malformed parent evidence link")
+        binding = link["binding"]
+        cid, rid = binding.get("candidate_id"), binding.get("requirement_id")
+        if not isinstance(cid, str) or not isinstance(rid, str) or cid != stable_candidate_id(rid, link["candidate_text"]):
+            raise ValueError("Parent evidence candidate identity mismatch")
+        if cid in ids:
+            raise ValueError("Duplicate or ambiguous parent evidence link")
+        ids.append(cid)
+        for key in ("reference_path", "evidence_path"):
+            path = candidate_evidence_path(child_path.parent, link[key])
+            resolved = path.resolve()
+            if resolved in archive_paths:
+                raise ValueError("Duplicate or ambiguous evidence archive path")
+            archive_paths.add(resolved)
+    expected = build_parent_evidence_links(parent_context, registry_workspace, ids,
+                                           analyser_factory=analyser_factory)
+    if envelope != expected:
+        raise ValueError("Child links differ from trusted parent evidence")
+    # Compare only content parsed from these exact, hash-verified bytes. A later
+    # context check cannot detect a temporary substitution restored before it.
+    child_raw = child_path.read_bytes()
+    if sha256(child_raw) != manifest["artifact_sha256"]:
+        raise ValueError("Child artifact digest mismatch")
+    child = json.loads(child_raw)
+    parent_raw = parent_path.read_bytes()
+    if sha256(parent_raw) != parent["artifact_sha256"]:
+        raise ValueError("Parent artifact digest mismatch")
+    original = json.loads(parent_raw)
+    factory = analyser_factory or RAGGroundingAnalyser
+    results = []
+    for link in envelope["links"]:
+        binding = link["binding"]
+        rid, cid = binding["requirement_id"], binding["candidate_id"]
+        rows = [row for row in child["requirements"] if row["requirement_id"] == rid]
+        parents = [row for row in original["requirements"] if row["requirement_id"] == rid]
+        if (len(rows) != 1 or len(parents) != 1 or rows[0]["original_text"] != parents[0]["original_text"]
+                or [c["text"] for c in rows[0].get("candidates", []) if c["candidate_id"] == cid] != [link["candidate_text"]]):
+            raise ValueError("Child requirement or candidate identity mismatch")
+        reference = candidate_evidence_path(child_path.parent, link["reference_path"])
+        if sha256(reference.read_bytes()) != link["reference_sha256"]:
+            raise ValueError("Archived reference receipt mismatch")
+        evidence = candidate_evidence_path(child_path.parent, link["evidence_path"])
+        record = load_candidate_validation(evidence, parent_path, source, rid, link["candidate_text"],
+            expected_sha256=link["receipt_sha256"], top_k=binding["retrieval"]["top_k"], analyser_factory=factory)
+        if record["binding"] != binding or record["models"] != link["models"]:
+            raise ValueError("Archived parent evidence binding mismatch")
+        results.append({"requirement_id": rid, "candidate_id": cid, "origin_snapshot_id": binding["snapshot_id"],
+                        "verdict_on_parent": record["verdict"], "completion_status": record["completion_status"]})
+    _, _, current_manifest, current_state = resolve_workflow_policy(child_context)
+    if current_manifest != manifest or current_state != state:
+        raise ValueError("Child evidence context changed during verification")
+    return {"version": 1, "purpose": PARENT_EVIDENCE_PURPOSE, "child_snapshot_id": state["snapshot_id"],
+            "child_independently_validated": False, "approval_authorized": False,
+            "publication_authorized": False, "bdd_ready_authorized": False, "links": results}
 
 
 def question_id(requirement_id: str, text: str) -> str:
