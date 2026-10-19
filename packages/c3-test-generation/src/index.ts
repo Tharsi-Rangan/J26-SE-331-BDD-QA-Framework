@@ -11,7 +11,14 @@ import {
 import { buildMockDecisions, type MockDecision } from './mock/decisions.js';
 import { planAssertions, planContext } from './assert/plan.js';
 import { chooseStrategies } from './strategy.js';
-import { TEST_ROOT, writeJestTests } from './writer/jest-writer.js';
+import {
+  TEST_ROOT,
+  writeJestTests,
+  type WriterInputs,
+  type WrittenFiles,
+} from './writer/jest-writer.js';
+import { makeSandbox, removeSandbox, runJest, type JestRunResult } from './runner/jest.js';
+import { applyVerification, verifyTests, type VerificationWorkFile } from './verify/verify.js';
 import { createModelClient, readModelConfig, type ModelClient } from './model/index.js';
 import { scanModule } from './scan/scanner.js';
 import type { ModuleScan } from './scan/types.js';
@@ -78,6 +85,17 @@ export {
 } from './writer/jest-writer.js';
 export type { ManifestTest, TestManifestFile, WrittenFiles } from './writer/jest-writer.js';
 export { makeSandbox, removeSandbox, runJest } from './runner/jest.js';
+export {
+  applyVerification,
+  classifyFailure,
+  isBroken,
+  referentialProblems,
+  semanticScore,
+  syntaxError,
+  verifyTests,
+  VERIFY_VERSION,
+} from './verify/verify.js';
+export type { RunStatus, TestVerification, VerificationWorkFile } from './verify/verify.js';
 export type { JestRunResult, JestTestResult } from './runner/jest.js';
 export { checkExpression, paramName, renderValue, replacePlaceholders } from './assert/expr.js';
 
@@ -93,7 +111,7 @@ export const WORK_DIR = 'c3/work';
  * Runnable Test Generation with Explainable Assertions and Mocking.
  * Done so far: C3-03 input reader, C3-04 dependency scan, C3-05 rule-based mock decisions,
  * C3-06 model client, C3-07 mock behaviour from the Given/When steps, C3-08 typed assertions,
- * C3-09 strategy selection, C3-10 Jest writer + test_manifest.json.
+ * C3-09 strategy selection, C3-10 Jest writer + test_manifest.json, C3-11 four-layer verification.
  */
 export async function run(
   options: RunOptions & { generatedAt?: string; model?: ModelClient },
@@ -177,17 +195,20 @@ export async function run(
     for (const c of strategies.choices)
       console.log(`  ${c.scenario_id} ${c.strategy} (${c.rule_id}): ${c.reason}`);
 
-    // C3-10: Jest files (one per requirement) + c3/test_manifest.json (contract file)
-    const written = writeJestTests({
+    // C3-10 + C3-11: Jest files and test_manifest.json, then the 4 checks and a Jest run on the subject
+    const subjectRoot = resolveSubjectRoot(inputs, options.subjectRoot);
+    const writerInputs = {
       inputs,
-      plans,
       strategies: strategies.choices,
       mockFile: file,
       behaviour: work,
       exports: new Map(scans.map((x) => [x.modulePath, x.scan.exports])),
       generatedAt: options.generatedAt,
       toolVersion: TOOL_VERSION,
-    });
+    };
+    const verified = writeAndVerify({ ...writerInputs, plans }, subjectRoot);
+    const { written, verification } = verified;
+
     for (const dir of [TEST_ROOT, 'c3/test_stubs'])
       fs.rmSync(path.join(options.out, dir), { recursive: true, force: true });
     for (const [rel, content] of written.files) {
@@ -195,13 +216,73 @@ export async function run(
       fs.mkdirSync(path.dirname(f), { recursive: true });
       fs.writeFileSync(f, content);
     }
+    written.manifest.tests = applyVerification(written.manifest.tests, verification);
     writeJson(path.join(options.out, 'c3', 'test_manifest.json'), written.manifest);
+    writeJson(path.join(options.out, WORK_DIR, 'verification.json'), verification);
     console.log(
       `[c3] Jest tests (C3-10): ${written.manifest.tests.length} test(s) in ${written.files.size - 1} file(s); ${written.notWritten.length} scenario(s) without a runnable test`,
     );
     for (const f of [...written.files.keys()].filter((k) => k.startsWith(TEST_ROOT)))
       console.log(`  ${f}`);
     for (const n of written.notWritten) console.log(`  no test for ${n.scenario_id}: ${n.reason}`);
+    printVerification(verification, subjectRoot);
+  }
+}
+
+/** Where the subject is: --subject-root, or the manifest's source.repo_path inside the --in folder. */
+export function resolveSubjectRoot(inputs: C3Inputs, subjectRoot?: string): string | undefined {
+  if (subjectRoot) return subjectRoot;
+  const rp = inputs.scenarios[0]?.subject.source['repo_path'];
+  const dir = typeof rp === 'string' ? path.join(inputs.inDir, rp) : undefined;
+  return dir && fs.existsSync(dir) ? dir : undefined;
+}
+
+/** C3-10 + C3-11: write the tests (in memory), run them in a sandbox, and verify every test. */
+export function writeAndVerify(
+  w: WriterInputs,
+  subjectRoot: string | undefined,
+): { written: WrittenFiles; verification: VerificationWorkFile; jest?: JestRunResult } {
+  const written = writeJestTests(w);
+  let jest: JestRunResult | undefined;
+  if (subjectRoot && written.manifest.tests.length) {
+    const repoPath = written.requires.values().next().value?.repoPath ?? 'subject-src';
+    const sb = makeSandbox({
+      runDir: '',
+      subjectRoot,
+      repoPath,
+      copyRun: false,
+      overrides: written.files,
+    });
+    try {
+      jest = runJest(sb);
+    } finally {
+      removeSandbox(sb);
+    }
+  }
+  const verification = verifyTests({
+    inputs: w.inputs,
+    plans: w.plans.plans,
+    written,
+    exports: w.exports,
+    subjectRoot,
+    jest,
+  });
+  return { written, verification, jest };
+}
+
+function printVerification(v: VerificationWorkFile, subjectRoot?: string): void {
+  const count = (k: string) => v.tests.filter((t) => t.run === k).length;
+  console.log(
+    `[c3] verification (C3-11)${subjectRoot ? ` on ${subjectRoot}` : ': no subject, so no Jest run'}:`,
+  );
+  if (v.subject_run)
+    console.log(
+      `  Jest: ${count('passed')} passed, ${count('assertion_failed')} assertion failed, ${count('subject_error')} subject error, ${count('test_error') + count('suite_error')} broken`,
+    );
+  for (const t of v.tests) {
+    const checks = `syn ${t.syntactic}, ref ${t.referential}, trace ${t.traceability}, sem ${t.semantic.status} ${t.semantic.score}`;
+    console.log(`  ${t.test_id} ${t.run.padEnd(16)} ${checks}`);
+    if (t.run !== 'passed' && t.message) console.log(`    ${t.message.split('\n')[0]}`);
   }
 }
 

@@ -80,6 +80,19 @@ export interface WrittenFiles {
   manifest: TestManifestFile;
   /** Scenarios with no runnable test, and why (C3-13 makes stubs for them). */
   notWritten: { scenario_id: string; requirement_id: string; reason: string }[];
+  /** C3-11: what each test file requires (checked by the referential layer). */
+  requires: Map<string, FileRequires>;
+}
+
+/** The require() lines of one test file, relative to the subject root where they point into the subject. */
+export interface FileRequires {
+  repoPath: string;
+  /** The module under test, relative to the subject root (e.g. 'src/registration.js'). */
+  module: string;
+  /** Export names the file takes from it. */
+  names: string[];
+  /** Mocked modules: subject-relative path for internal ones, else the package/builtin name. */
+  mocks: { specifier: string; subjectPath?: string; kind: string }[];
 }
 
 /** TST id for one case: TST-<scenario part>-<rr> (rr = Examples row, or 01). */
@@ -180,6 +193,7 @@ export function writeJestTests(w: WriterInputs): WrittenFiles {
   const files = new Map<string, string>();
   const tests: ManifestTest[] = [];
   const notWritten: WrittenFiles['notWritten'] = [];
+  const requires = new Map<string, FileRequires>();
 
   const byReq = new Map<string, C3ScenarioInput[]>();
   for (const sc of inputs.scenarios) {
@@ -332,6 +346,28 @@ export function writeJestTests(w: WriterInputs): WrittenFiles {
       '',
     ].join('\n');
     files.set(file, content);
+    requires.set(file, {
+      repoPath,
+      module: subject.modulePath,
+      names: [...used].sort(),
+      mocks: [
+        ...new Map(
+          scenarios
+            .flatMap((sc) => decisionsOf(sc.scenarioId))
+            .filter((d) => d.dependency.kind !== 'global_object')
+            .map((d) => [
+              d.dependency.import_specifier,
+              {
+                specifier: d.dependency.import_specifier,
+                ...(d.dependency.kind === 'internal_module' && d.dependency.resolved_path
+                  ? { subjectPath: d.dependency.resolved_path }
+                  : {}),
+                kind: d.dependency.kind,
+              },
+            ]),
+        ).values(),
+      ],
+    });
   }
 
   files.set(JEST_CONFIG, jestConfig(inputs));
@@ -361,7 +397,7 @@ export function writeJestTests(w: WriterInputs): WrittenFiles {
     tests,
     stubs: [],
   };
-  return { files, manifest, notWritten };
+  return { files, manifest, notWritten, requires };
 }
 
 /** c3/jest.config.cjs: run from the run folder. The subject's own node_modules is on the module path. */
