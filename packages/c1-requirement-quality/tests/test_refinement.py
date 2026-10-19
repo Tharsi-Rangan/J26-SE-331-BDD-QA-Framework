@@ -83,7 +83,7 @@ def test_explicit_placeholders_create_questions_but_never_answers():
     assert clarification_questions_for("The system shall use a suitable timeout.") == []
 
 
-def test_pending_candidate_preserves_original_and_keeps_answers_out_of_contract():
+def test_pending_candidate_preserves_original_and_keeps_answers_out_of_contract(verified_legacy):
     question = "What duration should replace [timeout]?"
     artifact = _artifact("The system shall wait for [timeout].")
     output, diagnostics = process_refinement_actions(
@@ -98,6 +98,7 @@ def test_pending_candidate_preserves_original_and_keeps_answers_out_of_contract(
             }]
         },
         "The system shall wait for [timeout].\n",
+        workflow_context=verified_legacy(artifact, "The system shall wait for [timeout].\n"),
     )
 
     requirement = _requirement(output)
@@ -113,11 +114,12 @@ def test_pending_candidate_preserves_original_and_keeps_answers_out_of_contract(
     assert requirement["bdd_ready"] is False
 
 
-def test_missing_clarification_answer_remains_an_open_question():
+def test_missing_clarification_answer_remains_an_open_question(verified_legacy):
     output, diagnostics = process_refinement_actions(
         _artifact("The system shall wait for [timeout]."),
         {"requirements": [{"requirement_id": REQ_ID}]},
         "The system shall wait for [timeout].\n",
+        workflow_context=verified_legacy(_artifact("The system shall wait for [timeout]."), "The system shall wait for [timeout].\n"),
     )
 
     requirement = _requirement(output)
@@ -128,7 +130,7 @@ def test_missing_clarification_answer_remains_an_open_question():
     assert requirement["final_text"] == "The system shall wait for [timeout]."
 
 
-def test_candidate_selection_without_decision_does_not_approve_it():
+def test_candidate_selection_without_decision_does_not_approve_it(verified_legacy):
     output, _ = process_refinement_actions(
         _artifact(),
         {"requirements": [{
@@ -136,6 +138,7 @@ def test_candidate_selection_without_decision_does_not_approve_it():
             "selected_candidate_text": CANDIDATE,
         }]},
         SRS_TEXT,
+        workflow_context=verified_legacy(_artifact(), SRS_TEXT),
     )
 
     requirement = _requirement(output)
@@ -144,7 +147,7 @@ def test_candidate_selection_without_decision_does_not_approve_it():
     assert requirement["bdd_ready"] is False
 
 
-def test_new_selection_does_not_inherit_approval_of_another_candidate():
+def test_new_selection_does_not_inherit_approval_of_another_candidate(verified_legacy):
     artifact = _artifact()
     old_text = "The system shall respond within 3 seconds."
     old_id = stable_candidate_id(REQ_ID, old_text)
@@ -161,6 +164,7 @@ def test_new_selection_does_not_inherit_approval_of_another_candidate():
             "selected_candidate_text": CANDIDATE,
         }]},
         SRS_TEXT,
+        workflow_context=verified_legacy(artifact, SRS_TEXT),
     )
 
     updated = _requirement(output)
@@ -171,7 +175,7 @@ def test_new_selection_does_not_inherit_approval_of_another_candidate():
 
 
 @pytest.mark.parametrize("decision", ["pending", "rejected"])
-def test_pending_or_rejected_candidate_retains_original_text(decision):
+def test_pending_or_rejected_candidate_retains_original_text(decision, verified_legacy):
     output, _ = process_refinement_actions(
         _artifact(),
         {"requirements": [{
@@ -181,6 +185,7 @@ def test_pending_or_rejected_candidate_retains_original_text(decision):
             "human_decision": decision,
         }]},
         SRS_TEXT,
+        workflow_context=verified_legacy(_artifact(), SRS_TEXT),
     )
 
     requirement = _requirement(output)
@@ -190,7 +195,7 @@ def test_pending_or_rejected_candidate_retains_original_text(decision):
     assert requirement["bdd_ready"] is False
 
 
-def test_approved_supported_candidate_is_selected_but_consistency_blocks_readiness():
+def test_approved_supported_candidate_is_selected_but_consistency_blocks_readiness(verified_legacy):
     output, diagnostics = process_refinement_actions(
         _artifact(),
         {"requirements": [{
@@ -200,6 +205,7 @@ def test_approved_supported_candidate_is_selected_but_consistency_blocks_readine
             "human_decision": "approved",
         }]},
         SRS_TEXT,
+        workflow_context=verified_legacy(_artifact(), SRS_TEXT),
     )
 
     requirement = _requirement(output)
@@ -226,7 +232,7 @@ def test_approved_supported_candidate_is_selected_but_consistency_blocks_readine
            "consistency" in diagnostics[0]["readiness_blockers"]
 
 
-def test_refinement_detects_conflict_with_another_requirement_and_keeps_readiness_closed():
+def test_refinement_detects_conflict_with_another_requirement_and_keeps_readiness_closed(verified_legacy):
     artifact = _artifact("The system shall allow account deletion.")
     other = copy.deepcopy(artifact["requirements"][0])
     other["requirement_id"] = "REQ-EX-202"
@@ -237,7 +243,7 @@ def test_refinement_detects_conflict_with_another_requirement_and_keeps_readines
 
     baseline, _ = process_refinement_actions(
         artifact, {"requirements": []}, "The system shall allow account deletion.\n"
-    )
+    , workflow_context=verified_legacy(artifact, "The system shall allow account deletion.\n"))
     assert all(item["tier"] == "TIER_1_AUTO_REFINE" for item in baseline["requirements"])
 
     output, diagnostics = process_refinement_actions(
@@ -248,6 +254,7 @@ def test_refinement_detects_conflict_with_another_requirement_and_keeps_readines
             "human_decision": "approved",
         }]},
         "The system shall allow account deletion.\n",
+        workflow_context=verified_legacy(artifact, "The system shall allow account deletion.\n"),
     )
 
     first, second = output["requirements"]
@@ -263,7 +270,7 @@ def test_refinement_detects_conflict_with_another_requirement_and_keeps_readines
     assert candidate_diagnostic["tier"]["tier"] == "TIER_3_ESCALATE"
 
 
-def test_refinement_tier_one_candidate_allows_only_whitespace_normalization():
+def test_refinement_tier_one_candidate_allows_only_whitespace_normalization(verified_legacy):
     original = "The system shall allow users to register."
     artifact = _artifact(original)
     artifact["requirements"][0]["tier"] = "TIER_1_AUTO_REFINE"
@@ -276,6 +283,7 @@ def test_refinement_tier_one_candidate_allows_only_whitespace_normalization():
             "human_decision": "approved",
         }]},
         original + "\n",
+        workflow_context=verified_legacy(artifact, original + "\n"),
     )
     requirement = _requirement(output)
     assert requirement["original_text"] == original
@@ -285,7 +293,7 @@ def test_refinement_tier_one_candidate_allows_only_whitespace_normalization():
     assert requirement["bdd_ready"] is True
 
 
-def test_unsupported_candidate_is_reported_and_cannot_become_bdd_ready():
+def test_unsupported_candidate_is_reported_and_cannot_become_bdd_ready(verified_legacy):
     unsupported = "The system shall permit transfers up to 100000 dollars."
     output, diagnostics = process_refinement_actions(
         _artifact("The system shall permit transfers."),
@@ -295,6 +303,7 @@ def test_unsupported_candidate_is_reported_and_cannot_become_bdd_ready():
             "human_decision": "approved",
         }]},
         "The system shall permit transfers.\n",
+        workflow_context=verified_legacy(_artifact("The system shall permit transfers."), "The system shall permit transfers.\n"),
     )
 
     requirement = _requirement(output)
@@ -307,7 +316,7 @@ def test_unsupported_candidate_is_reported_and_cannot_become_bdd_ready():
     assert candidate["grounding"]["unsupported_claims"] == [unsupported]
 
 
-def test_edited_decision_creates_a_candidate_and_records_edited_text():
+def test_edited_decision_creates_a_candidate_and_records_edited_text(verified_legacy):
     output, _ = process_refinement_actions(
         _artifact(),
         {"requirements": [{
@@ -316,6 +325,7 @@ def test_edited_decision_creates_a_candidate_and_records_edited_text():
             "edited_text": CANDIDATE,
         }]},
         SRS_TEXT,
+        workflow_context=verified_legacy(_artifact(), SRS_TEXT),
     )
 
     requirement = _requirement(output)
@@ -353,12 +363,12 @@ def test_readiness_requires_approved_decision_and_every_gate_to_pass():
         ({"requirements": [{"requirement_id": REQ_ID, "typo_decision": "approved"}]}, "unsupported refinement action fields"),
     ],
 )
-def test_invalid_actions_fail_clearly(actions, message):
+def test_invalid_actions_fail_clearly(actions, message, verified_legacy):
     with pytest.raises(ValueError, match=message):
-        process_refinement_actions(_artifact(), actions, SRS_TEXT)
+        process_refinement_actions(_artifact(), actions, SRS_TEXT, workflow_context=verified_legacy(_artifact(), SRS_TEXT))
 
 
-def test_duplicate_actions_and_unknown_requirement_ids_are_rejected():
+def test_duplicate_actions_and_unknown_requirement_ids_are_rejected(verified_legacy):
     with pytest.raises(ValueError, match="duplicate action"):
         process_refinement_actions(
             _artifact(),
@@ -367,18 +377,20 @@ def test_duplicate_actions_and_unknown_requirement_ids_are_rejected():
                 {"requirement_id": REQ_ID},
             ]},
             SRS_TEXT,
+            workflow_context=verified_legacy(_artifact(), SRS_TEXT),
         )
     with pytest.raises(ValueError, match="unknown requirement_id"):
         process_refinement_actions(
             _artifact(), {"requirements": [{"requirement_id": "REQ-EX-999"}]}, SRS_TEXT
-        )
+        , workflow_context=verified_legacy(_artifact(), SRS_TEXT))
 
 
-def test_not_required_is_accepted_only_as_an_explicit_decision():
+def test_not_required_is_accepted_only_as_an_explicit_decision(verified_legacy):
     output, _ = process_refinement_actions(
         _artifact(),
         {"requirements": [{"requirement_id": REQ_ID, "human_decision": "not_required"}]},
         SRS_TEXT,
+        workflow_context=verified_legacy(_artifact(), SRS_TEXT),
     )
 
     requirement = _requirement(output)
@@ -458,7 +470,7 @@ def test_cli_refine_rejects_srs_with_different_source_filename(tmp_path):
 # Regression tests for single-requirement consistency & BDD readiness
 # ---------------------------------------------------------------------------
 
-def test_regression_single_eligible_requirement_with_no_peer_pairs():
+def test_regression_single_eligible_requirement_with_no_peer_pairs(verified_legacy):
     """A single requirement with no peer pairs can reach bdd_ready = True when approved."""
     text = "The system shall send a confirmation email after registration."
     artifact = _artifact(text)
@@ -470,6 +482,7 @@ def test_regression_single_eligible_requirement_with_no_peer_pairs():
             "human_decision": "not_required",
         }]},
         text + "\n",
+        workflow_context=verified_legacy(artifact, text + "\n"),
     )
     req = _requirement(output)
     assert req["tier"] == "TIER_1_AUTO_REFINE"
@@ -482,7 +495,7 @@ def test_regression_single_eligible_requirement_with_no_peer_pairs():
     assert diagnostics[0]["readiness_blockers"] == []
 
 
-def test_regression_pending_human_approval_blocks_readiness():
+def test_regression_pending_human_approval_blocks_readiness(verified_legacy):
     """Even when all checks pass, pending human approval blocks bdd_ready promotion."""
     text = "The system shall send a confirmation email after registration."
     artifact = _artifact(text)
@@ -494,6 +507,7 @@ def test_regression_pending_human_approval_blocks_readiness():
             "human_decision": "pending",
         }]},
         text + "\n",
+        workflow_context=verified_legacy(artifact, text + "\n"),
     )
     req = _requirement(output)
     assert req["human_decision"] == "pending"
@@ -503,7 +517,7 @@ def test_regression_pending_human_approval_blocks_readiness():
     assert req["bdd_ready"] is False
 
 
-def test_regression_multiple_consistent_requirements_reach_bdd_ready():
+def test_regression_multiple_consistent_requirements_reach_bdd_ready(verified_legacy):
     """Multiple consistent requirements resolve consistency as 'pass' and reach bdd_ready = True."""
     req1 = "The user age must be at least 18 years."
     req2 = "The user age must be at most 65 years."
@@ -523,6 +537,7 @@ def test_regression_multiple_consistent_requirements_reach_bdd_ready():
             {"requirement_id": "REQ-EX-202", "human_decision": "not_required"},
         ]},
         srs,
+        workflow_context=verified_legacy(artifact, srs),
     )
     first, second = output["requirements"]
     assert first["validation"]["checks"]["consistency"] == "pass"
@@ -535,7 +550,7 @@ def test_regression_multiple_consistent_requirements_reach_bdd_ready():
     assert second["bdd_ready"] is True
 
 
-def test_regression_conflicting_requirements_remain_blocked_and_failed():
+def test_regression_conflicting_requirements_remain_blocked_and_failed(verified_legacy):
     """Contradictory requirements fail consistency, fail BDD readiness, and remain blocked."""
     req1 = "The system shall allow account deletion."
     req2 = "The system shall not allow account deletion."
@@ -554,6 +569,7 @@ def test_regression_conflicting_requirements_remain_blocked_and_failed():
             {"requirement_id": "REQ-EX-202", "human_decision": "not_required"},
         ]},
         srs,
+        workflow_context=verified_legacy(artifact, srs),
     )
     first, second = output["requirements"]
     assert first["validation"]["checks"]["consistency"] == "fail"
@@ -566,7 +582,7 @@ def test_regression_conflicting_requirements_remain_blocked_and_failed():
     assert second["bdd_ready"] is False
 
 
-def test_regression_tier_2_and_tier_3_blocking():
+def test_regression_tier_2_and_tier_3_blocking(verified_legacy):
     """Tier 2 (clarification) and Tier 3 (escalation) requirements are blocked from BDD promotion."""
     # Tier 2 via unresolved placeholder
     placeholder_text = "The system shall respond within [timeout] seconds."
@@ -578,6 +594,7 @@ def test_regression_tier_2_and_tier_3_blocking():
             "human_decision": "not_required",
         }]},
         placeholder_text + "\n",
+        workflow_context=verified_legacy(artifact, placeholder_text + "\n"),
     )
     req_t2 = _requirement(output_t2)
     assert req_t2["tier"] == "TIER_2_CLARIFY"
@@ -603,6 +620,7 @@ def test_regression_tier_2_and_tier_3_blocking():
             {"requirement_id": "REQ-EX-202", "human_decision": "not_required"},
         ]},
         srs_text,
+        workflow_context=verified_legacy(artifact_t3, srs_text),
     )
     first, second = output_t3["requirements"]
     assert first["tier"] == "TIER_3_ESCALATE"
@@ -615,61 +633,68 @@ def test_regression_tier_2_and_tier_3_blocking():
     assert second["bdd_ready"] is False
 
 
-def test_custom_questions_survive_refinement_rounds():
+def test_custom_questions_survive_refinement_rounds(verified_legacy):
     text = "The system shall wait for [timeout]."
     custom = "Who confirms the timeout?"
     first, _ = process_refinement_actions(
         _artifact(text),
         {"requirements": [{"requirement_id": REQ_ID, "clarification_questions": [custom]}]},
         text,
+        workflow_context=verified_legacy(_artifact(text), text),
     )
     second, _ = process_refinement_actions(
         first, {"requirements": [{"requirement_id": REQ_ID}]}, text,
+        workflow_context=verified_legacy(first, text),
     )
     assert _requirement(second)["clarification_questions"] == _requirement(first)["clarification_questions"]
     third, _ = process_refinement_actions(
         second,
         {"requirements": [{"requirement_id": REQ_ID, "clarification_questions": [custom]}]},
         text,
+        workflow_context=verified_legacy(second, text),
     )
     assert _requirement(third)["clarification_questions"] == [
         "What value or rule should replace [timeout]?", custom,
     ]
 
 
-def test_inherited_edited_and_not_required_decisions_survive_empty_rounds():
+def test_inherited_edited_and_not_required_decisions_survive_empty_rounds(verified_legacy):
     text = "The system shall send email."
     candidate = "The system  shall send email."
     first, _ = process_refinement_actions(
         _artifact(text),
         {"requirements": [{"requirement_id": REQ_ID, "human_decision": "edited", "edited_text": candidate}]},
         text,
+        workflow_context=verified_legacy(_artifact(text), text),
     )
-    second, _ = process_refinement_actions(first, {"requirements": [{"requirement_id": REQ_ID}]}, text)
+    second, _ = process_refinement_actions(first, {"requirements": [{"requirement_id": REQ_ID}]}, text, workflow_context=verified_legacy(first, text))
     assert _requirement(second)["human_decision"] == "edited"
     assert _requirement(second)["final_text"] == candidate
     third, _ = process_refinement_actions(
         second,
         {"requirements": [{"requirement_id": REQ_ID, "human_decision": "not_required"}]},
         text,
+        workflow_context=verified_legacy(second, text),
     )
-    fourth, _ = process_refinement_actions(third, {"requirements": [{"requirement_id": REQ_ID}]}, text)
+    fourth, _ = process_refinement_actions(third, {"requirements": [{"requirement_id": REQ_ID}]}, text, workflow_context=verified_legacy(third, text))
     assert _requirement(fourth)["human_decision"] == "not_required"
 
 
 @pytest.mark.parametrize("field", ["selected_candidate_text", "edited_text"])
-def test_new_candidate_does_not_inherit_edited_approval(field):
+def test_new_candidate_does_not_inherit_edited_approval(field, verified_legacy):
     text = "The system shall send email."
     first, _ = process_refinement_actions(
         _artifact(text),
         {"requirements": [{"requirement_id": REQ_ID, "human_decision": "edited",
                            "edited_text": "The system  shall send email."}]},
         text,
+        workflow_context=verified_legacy(_artifact(text), text),
     )
     second, _ = process_refinement_actions(
         first,
         {"requirements": [{"requirement_id": REQ_ID, field: "The system shall record events."}]},
         text,
+        workflow_context=verified_legacy(first, text),
     )
     assert _requirement(second)["human_decision"] == "pending"
     assert _requirement(second)["final_text"] == text

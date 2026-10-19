@@ -4,6 +4,9 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import re
+from collections import Counter
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
@@ -11,11 +14,106 @@ from c1_requirement_quality.contract import validate_contract_artifact
 from c1_requirement_quality.lexical_patterns import PLACEHOLDER_PATTERN
 from c1_requirement_quality.ml.ml_diagnostics import _require_memory
 from c1_requirement_quality.refinement import stable_candidate_id
-from c1_requirement_quality.source_integrity import sha256, verify_source
+from c1_requirement_quality.source_integrity import sha256, verify_source, VerifiedWorkflowContext
 from c1_requirement_quality.workflow_persistence import load_state
 from c1_requirement_quality.rag.rag_grounding_analyser import RAGGroundingAnalyser
 
 POLICY = "c1-candidate-rag-v1"
+
+
+def compare_meaning(original: str, candidate: str) -> dict[str, Any]:
+    """Conservative obligation comparison, not a semantic-equivalence model.
+
+    Only whitespace and terminal full stops are normalized. Changed wording,
+    reordered clauses and human-supplied facts require further review, even when
+    retrieved source evidence independently supports them.
+    """
+    from c1_requirement_quality.rag.fact_extractor import extract_facts
+    before = extract_facts(original, use_spacy=False)
+    after = extract_facts(candidate, use_spacy=False)
+    normalize = lambda text: " ".join(text.rstrip(".").split())
+    old = [normalize(f.text) for f in before]
+    new = [normalize(f.text) for f in after]
+    differences = {}
+    def value(fact, attribute):
+        # The existing extractor can include the first object word in action.
+        # Preserve a literal predicate/remainder comparison without inferring roles.
+        match = re.search(r"\b(?:shall|must|may|can|could|should|might|will|would)\s+(?:not\s+)?(\w+)\s*(.*)", fact.text, re.I)
+        if match and attribute in {"action", "target"}:
+            return normalize(match.group(1 if attribute == "action" else 2))
+        return getattr(fact, attribute)
+    for attribute in ("actor", "action", "target", "is_negated", "numeric_values", "units", "conditions", "constraints"):
+        left = [value(f, attribute) for f in before]
+        right = [value(f, attribute) for f in after]
+        if left != right:
+            differences[attribute] = {"original": [f.to_dict() for f in before],
+                                      "candidate": [f.to_dict() for f in after]}
+    modals = lambda text: re.findall(r"\b(?:shall|must|may|can|could|should|might|will|would)\b", text, re.I)
+    if modals(original) != modals(candidate):
+        differences["modality"] = {"original": modals(original), "candidate": modals(candidate)}
+    return {"policy": "c1-conservative-meaning-v1",
+            "status": "preserved" if old and old == new else "changed_or_unproven",
+            "removed_or_changed_obligations": list((Counter(old) - Counter(new)).elements()),
+            "added_or_changed_obligations": list((Counter(new) - Counter(old)).elements()),
+            "differences": differences}
+
+
+@dataclass(frozen=True)
+class CandidateGroundingContext(VerifiedWorkflowContext):
+    """Trusted caller-supplied receipts; never obtain digests from proposal JSON."""
+
+    receipts: dict[str, tuple[Path, str]] = field(default_factory=dict)
+    top_k: int = 5
+    analyser_factory: Callable[..., Any] = RAGGroundingAnalyser
+
+    def check_parent(self, artifact: dict[str, Any]) -> None:
+        if artifact != json.loads(self.input_path.read_text(encoding="utf-8-sig")):
+            raise ValueError("Candidate grounding context belongs to a different parent artifact")
+
+    def assess(self, requirement_id: str, candidate: str, srs_text: str,
+               original: str | None, workflow_record: dict[str, Any] | None) -> dict[str, Any]:
+        """Verify fresh evidence and meaning; do not infer, rank or publish decisions."""
+        meaning = {"status": "unassessed"}
+        try:
+            text, _ = _context(self.input_path, self.source, requirement_id, candidate, self.top_k)
+            artifact = json.loads(self.input_path.read_text(encoding="utf-8-sig"))
+            row = next(r for r in artifact["requirements"] if r["requirement_id"] == requirement_id)
+            state, _ = load_state(self.input_path, self.source)
+            if (text != srs_text or row["original_text"] != original
+                    or workflow_record is not None and workflow_record != state["requirements"][requirement_id]):
+                raise ValueError("Candidate evaluation source, original text or workflow basis mismatch")
+            meaning = compare_meaning(original, candidate)
+            reference = self.receipts.get(stable_candidate_id(requirement_id, candidate))
+            if reference is None:
+                raise ValueError("Mandatory candidate RAG evidence receipt missing")
+            path, digest = reference
+            record = load_candidate_validation(path, self.input_path, self.source,
+                requirement_id, candidate, expected_sha256=digest, top_k=self.top_k,
+                analyser_factory=self.analyser_factory)
+            result = dict(record["grounding"])
+            verdict = record["verdict"]
+            result.update(authority="rag", verdict=verdict,
+                original_srs_status=result.get("status", "unsupported"),
+                status="supported" if verdict == "SUPPORTED" else "unsupported",
+                meaning_preservation=meaning,
+                eligible_for_acceptance=(verdict == "SUPPORTED" and record["completion_status"] == "completed"
+                                         and meaning["status"] == "preserved"),
+                validation_receipt_sha256=digest, validation_binding=record["binding"],
+                models=record["models"], completion_status=record["completion_status"])
+            return result
+        except (ValueError, OSError, RuntimeError, KeyError, TypeError, AttributeError) as error:
+            return {"authority": "rag", "status": "unsupported", "verdict": "ERROR",
+                    "evidence": [], "diagnostics": [], "errors": [f"{type(error).__name__}: {error}"],
+                    "meaning_preservation": meaning,
+                    "eligible_for_acceptance": False, "completion_status": "incomplete"}
+
+
+def context_for_snapshot(input_path: Path, source: Path, supplied=None) -> CandidateGroundingContext:
+    if supplied is not None:
+        if supplied.input_path.resolve() != input_path.resolve() or supplied.source.resolve() != source.resolve():
+            raise ValueError("Candidate grounding context belongs to a different snapshot/source")
+        return supplied
+    return CandidateGroundingContext(input_path, source)
 
 
 def _canonical(value: Any) -> bytes:

@@ -137,7 +137,13 @@ def _context(row: dict[str, Any], source_text: str, state: dict[str, Any],
 
 
 def validate_proposal(proposal: dict[str, Any], context: dict[str, Any], source_text: str,
-                      rows: list[dict[str, Any]], record: dict[str, Any], source_format: str | None) -> dict[str, Any]:
+                      rows: list[dict[str, Any]], record: dict[str, Any], source_format: str | None,
+                      *, grounding_context=None, require_rag: bool = False, workflow_context=None) -> dict[str, Any]:
+    from c1_requirement_quality.source_integrity import resolve_workflow_policy
+    policy_context = workflow_context or grounding_context
+    rag, _, _, _ = resolve_workflow_policy(policy_context, source_text=source_text)
+    if rows != json.loads(policy_context.input_path.read_text(encoding="utf-8-sig"))["requirements"]:
+        raise ValueError("Clarification rows do not match verified parent artifact")
     if list(Draft202012Validator(PROPOSAL_SCHEMA).iter_errors(proposal)):
         raise ValueError("Clarification proposal does not match internal schema v1")
     if proposal["requirement_id"] != context["requirement_id"]:
@@ -178,14 +184,18 @@ def validate_proposal(proposal: dict[str, Any], context: dict[str, Any], source_
         for question in scoped_record["questions"].values():
             if "HUMAN:" + str(question.get("current_answer_id")) not in cited:
                 question["current_answer_id"] = None
-        evaluation = _evaluate_candidate(text, cited_source, context["original_text"], scoped_record, source_format=source_format)
+        evaluation = _evaluate_candidate(text, source_text if grounding_context is not None else cited_source,
+            context["original_text"], record if grounding_context is not None else scoped_record,
+            source_format=source_format, grounding_context=grounding_context,
+            requirement_id=context["requirement_id"], require_rag=rag or require_rag,
+            workflow_context=policy_context if rag or grounding_context is not None else policy_context.scoped(cited_source))
         consistency = _consistency_with_candidate(context["requirement_id"], text, rows)
         tier = classify_tier(evaluation["quality_findings"], evaluation["grounding"], consistency,
                              original_text=context["original_text"], candidate_text=text)
         candidate = _candidate_validation(evaluation, consistency, text=text, tier=tier["tier"],
                                          clarification_questions=context["unresolved_questions"])
         numbers = set(re.findall(r"\d+(?:\.\d+)?", text))
-        rejected = (not rewrite["source_evidence_refs"] or context["rewrite_blocked"]
+        rejected = (not evaluation["candidate_eligible"] or not rewrite["source_evidence_refs"] or context["rewrite_blocked"]
                     or proposal["claimed_grounding_status"] == "conflicting"
                     or any(a["blocks_rewrite"] for a in proposal["unresolved_assumptions"])
                     or bool(numbers - supplied_numbers) or evaluation["grounding"]["status"] != "supported"
@@ -206,8 +216,9 @@ def validate_proposal(proposal: dict[str, Any], context: dict[str, Any], source_
 def propose_clarifications_run(input_path: Path, source: Path, out: Path, requirement_ids: list[str], *,
                                defect_diagnostics: Path | None = None, similarity_diagnostics: Path | None = None,
                                max_requests: int = 2, max_evidence_chars: int = 6000,
-                               max_context_chars: int = 12000) -> None:
+                               max_context_chars: int = 12000, grounding_context=None) -> None:
     from c1_requirement_quality.contract import validate_contract_artifact as _validate_contract_artifact
+    from c1_requirement_quality.source_integrity import VerifiedWorkflowContext
     if out.exists():
         raise FileExistsError(f"Proposal output already exists: {out}")
     if (not requirement_ids or len(set(requirement_ids)) != len(requirement_ids)
@@ -221,6 +232,9 @@ def propose_clarifications_run(input_path: Path, source: Path, out: Path, requir
     _validate_contract_artifact(artifact)
     source_text, manifest = verify_source(input_path, source)
     state, _ = load_state(input_path, source)
+    if manifest.get("rag_policy") or grounding_context is not None:
+        from c1_requirement_quality.rag.candidate_validation import context_for_snapshot
+        grounding_context = context_for_snapshot(input_path, source, grounding_context)
     inputs = {}
     hashes = {}
     for kind, path in [("distilbert", defect_diagnostics), ("minilm", similarity_diagnostics)]:
@@ -240,7 +254,9 @@ def propose_clarifications_run(input_path: Path, source: Path, out: Path, requir
         response = backend.propose_clarification(context)
         validated = validate_proposal(response["proposal"], context, source_text,
                                       list(rows.values()), state["requirements"][context["requirement_id"]],
-                                      "docx" if source.suffix.lower() == ".docx" else None)
+                                      "docx" if source.suffix.lower() == ".docx" else None,
+                                      grounding_context=grounding_context,
+                                      workflow_context=VerifiedWorkflowContext(input_path, source))
         proposals.append({"proposal": validated, "request": {
             "context_sha256": _hash(json.dumps(context, sort_keys=True, ensure_ascii=False).encode()),
             "sent_context": context, "model_requested": backend.model, "model_returned": response["model"],

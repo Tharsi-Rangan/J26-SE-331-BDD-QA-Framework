@@ -409,10 +409,18 @@ def generate_candidate_suggestions(
     workflow_records: dict[str, Any] | None = None,
     consistency_context: dict[str, Any] | None = None,
     requirement_ids: list[str] | None = None,
+    grounding_context=None,
+    workflow_context=None,
 ) -> dict[str, Any]:
     """Generate requirement rewrite candidate suggestions into a sidecar artifact."""
-    if grounding_mode != "lexical":
+    from c1_requirement_quality.source_integrity import resolve_workflow_policy
+    rag, _, _, _ = resolve_workflow_policy(workflow_context or grounding_context, artifact=artifact, source_text=srs_text)
+    if rag and grounding_context is None:
+        raise ValueError("Authoritative RAG evidence context required; lexical fallback prohibited")
+    if grounding_mode != "lexical" and not (grounding_mode == "rag" and grounding_context is not None):
         raise ValueError("Candidate validation supports only lexical grounding; RAG is available for run and advisory verification")
+    if grounding_context is not None:
+        grounding_context.check_parent(artifact)
     if backend is None:
         backend = DeterministicSubstitutionBackend()
 
@@ -560,7 +568,9 @@ def generate_candidate_suggestions(
                 req_id, orig_text, req.get("clarification_questions", []), req_answers,
             )
             evaluation = _evaluate_candidate(cand_text, srs_text, orig_text, record,
-                source_format="docx" if source_document.get("name", "").lower().endswith(".docx") else None)
+                source_format="docx" if source_document.get("name", "").lower().endswith(".docx") else None,
+                grounding_context=grounding_context, requirement_id=req_id, require_rag=rag or grounding_mode == "rag",
+                workflow_context=workflow_context)
             cand_findings = evaluation.get("quality_findings", [])
             cand_defect_types = {f.get("type") for f in cand_findings if f.get("type")}
 
@@ -579,11 +589,12 @@ def generate_candidate_suggestions(
             if evaluation["grounding"].get("original_srs_status") != "supported":
                 srs_grounding_failure_count += 1
 
-            if grounding_check != "pass":
+            if grounding_check != "pass" or not evaluation["candidate_eligible"]:
                 rejected_candidates.append({
                     "candidate_id": cand_id,
                     "text": cand_text,
-                    "rejected_reason": "unsupported_facts",
+                    "rejected_reason": "rag_or_meaning_ineligible" if grounding_context is not None else "unsupported_facts",
+                    "evaluation": evaluation,
                     "source_evidence": source_ev,
                 })
                 continue
@@ -700,7 +711,7 @@ def generate_candidate_suggestions(
             "backend": backend.__class__.__name__,
             "baseline_type": "rule-based baseline generator",
             "grounding_mode_requested": grounding_mode,
-            "grounding_mode_used": "lexical",
+            "grounding_mode_used": "rag" if grounding_context is not None else "lexical",
             "grounding_mode_errors": [],
         },
         "metrics": {
@@ -746,7 +757,7 @@ def generate_candidates_run(
 
     _validate_contract_artifact(artifact)
 
-    from c1_requirement_quality.source_integrity import verify_source
+    from c1_requirement_quality.source_integrity import verify_source, VerifiedWorkflowContext
 
     srs_text, _source_manifest = verify_source(input_path, srs_path)
     from c1_requirement_quality.source_integrity import require_refinement_grounding
@@ -783,6 +794,7 @@ def generate_candidates_run(
                                for cid, candidate in record["candidates"].items() if candidate["status"] == "REJECTED"},
         workflow_records=workflow_state["requirements"] if clarification_answers_path is None else None,
         consistency_context=context_from_state(workflow_state) if clarification_answers_path is None else None,
+        workflow_context=VerifiedWorkflowContext(input_path, srs_path),
     )
 
     import hashlib

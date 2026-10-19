@@ -341,8 +341,13 @@ class DemoSession:
         result, _ = _load_diagnostics(path, data, _hash(self.current.read_bytes()), kind)
         return result
 
-    def proposals(self, path: Path):
+    def proposals(self, path: Path, *, grounding_context=None):
         data, text, manifest, state = self.read()
+        from c1_requirement_quality.source_integrity import VerifiedWorkflowContext
+        policy_context = VerifiedWorkflowContext(self.current, self.source)
+        if manifest.get("rag_policy") or grounding_context is not None:
+            from c1_requirement_quality.rag.candidate_validation import context_for_snapshot
+            grounding_context = context_for_snapshot(self.current, self.source, grounding_context)
         report = json.loads(path.read_text(encoding="utf-8-sig"))
         if (report.get("input_sha256") != _hash(self.current.read_bytes()) or report.get("source_sha256") != manifest["sha256"]
                 or report.get("document_id") != manifest["document_id"] or report.get("decision_effect") != "none"):
@@ -365,12 +370,18 @@ class DemoSession:
                     context["advisory_context"].append({"ref": f"{prefix}:{rid}"})
             value = {k: v for k, v in p.items() if k != "validation"}
             checked = validate_proposal(value, context, text, list(rows.values()), state["requirements"][rid],
-                                        "docx" if self.source.suffix.lower() == ".docx" else None)
+                                        "docx" if self.source.suffix.lower() == ".docx" else None,
+                                        grounding_context=grounding_context, workflow_context=policy_context)
             result.append(checked)
         return result
 
-    def candidates(self, path: Path):
+    def candidates(self, path: Path, *, grounding_context=None):
         data, text, manifest, state = self.read()
+        from c1_requirement_quality.source_integrity import VerifiedWorkflowContext
+        policy_context = VerifiedWorkflowContext(self.current, self.source)
+        if manifest.get("rag_policy") or grounding_context is not None:
+            from c1_requirement_quality.rag.candidate_validation import context_for_snapshot
+            grounding_context = context_for_snapshot(self.current, self.source, grounding_context)
         report = json.loads(path.read_text(encoding="utf-8-sig"))
         if (report.get("input_sha256") != _hash(self.current.read_bytes())
                 or report.get("source_sha256") != manifest["sha256"]
@@ -403,7 +414,8 @@ class DemoSession:
                     raise ValueError("Unknown candidate evidence provenance")
                 checked = copy.deepcopy(candidate)
                 evaluation = _evaluate_candidate(candidate["text"], text, rows[rid]["original_text"], state["requirements"][rid],
-                    source_format="docx" if self.source.suffix.lower() == ".docx" else None)
+                    source_format="docx" if self.source.suffix.lower() == ".docx" else None,
+                    grounding_context=grounding_context, requirement_id=rid, workflow_context=policy_context)
                 from c1_requirement_quality.effective_consistency import context_from_state
                 consistency = _consistency_with_candidate(rid, candidate["text"], list(rows.values()), state["requirements"], context_from_state(state))
                 tier = classify_tier(evaluation["quality_findings"], evaluation["grounding"], consistency,

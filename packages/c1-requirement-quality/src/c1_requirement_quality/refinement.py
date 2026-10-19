@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import re
+import weakref
 from collections.abc import Mapping
 from typing import Any
 
@@ -29,6 +31,35 @@ DECISIONS = frozenset({"approved", "rejected", "edited", "pending", "not_require
 ACCEPTED_DECISIONS = frozenset({"approved", "edited", "not_required"})
 REQUIRED_READINESS_CHECKS = ("quality", "grounding", "consistency", "bdd_readiness")
 from c1_requirement_quality.lexical_patterns import PLACEHOLDER_PATTERN
+
+
+class _RefinementArtifact(dict):
+    """An in-memory result; provenance is retained separately, never in JSON."""
+
+
+_ROUND_ARTIFACTS: dict[int, tuple] = {}
+
+
+def _artifact_digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
+                                    allow_nan=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _verify_round_artifact(artifact, context, source_text):
+    from c1_requirement_quality.source_integrity import resolve_workflow_policy
+    # Always reverify the sealed parent, including source and workflow ancestry.
+    _, _, manifest, _ = resolve_workflow_policy(context, source_text=source_text)
+    parent = json.loads(context.input_path.read_text(encoding="utf-8-sig"))
+    resolve_workflow_policy(context, artifact=parent, source_text=source_text)
+    binding = (str(context.input_path.resolve()), str(context.source.resolve()),
+               context.source_scope, _artifact_digest(parent), _artifact_digest(manifest))
+    issued = _ROUND_ARTIFACTS.get(id(artifact))
+    if artifact != parent and not (
+        issued is not None and issued[0]() is artifact and issued[1] == binding
+        and issued[2] == _artifact_digest(artifact)
+    ):
+        raise ValueError("Workflow provenance or parent artifact mismatch")
+    return manifest, binding
 
 
 def stable_candidate_id(requirement_id: str, text: str) -> str:
@@ -152,9 +183,13 @@ def _validate_answers(value: Any, questions: list[str]) -> list[dict[str, str]]:
 
 
 def _evaluate_candidate(text: str, srs_text: str, original_text: str | None = None,
-                        workflow_record: dict[str, Any] | None = None, *, source_format: str | None = None) -> dict[str, Any]:
+                        workflow_record: dict[str, Any] | None = None, *, source_format: str | None = None,
+                        grounding_context=None, requirement_id: str | None = None,
+                        require_rag: bool = False, workflow_context=None) -> dict[str, Any]:
     findings = analyse_requirement(text)
-    grounding = grounded_current(text, srs_text, original_text, workflow_record, source_format=source_format)
+    grounding = grounded_current(text, srs_text, original_text, workflow_record, source_format=source_format,
+        grounding_context=grounding_context, requirement_id=requirement_id, require_rag=require_rag,
+        workflow_context=workflow_context)
     grounding_status = grounding.get("status")
     if grounding_status == "supported":
         grounding_check = "pass"
@@ -168,6 +203,7 @@ def _evaluate_candidate(text: str, srs_text: str, original_text: str | None = No
         "quality_check": "fail" if findings else "pass",
         "grounding": grounding,
         "grounding_check": grounding_check,
+        "candidate_eligible": grounding.get("eligible_for_acceptance", grounding_check == "pass"),
     }
 
 
@@ -219,12 +255,15 @@ def _candidate_validation(
         escalation_active=escalation_active,
     )
     checks["bdd_readiness"] = bdd_result["check"]
-    status = "failed" if "fail" in checks.values() else "needs_review"
+    ineligible = evaluation["grounding"].get("authority") == "rag" and not evaluation["candidate_eligible"]
+    status = "failed" if "fail" in checks.values() or ineligible else "needs_review"
     # Candidate evaluation never implies human approval.
     ready = can_mark_bdd_ready(status, checks, "pending")
     return {
         "status": status,
         "checks": checks,
+        "candidate_eligible": evaluation.get("candidate_eligible", False),
+        "eligibility_reasons": ["Candidate RAG evidence or meaning preservation is not eligible"] if ineligible else [],
         "bdd_readiness": {
             "check": bdd_result["check"],
             "bdd_ready": ready,
@@ -235,12 +274,31 @@ def _candidate_validation(
 
 
 def process_refinement_actions(
+    validated_requirements, actions, srs_text, *, workflow_records=None, consistency_context=None,
+    grounding_context=None, require_rag=False, workflow_context=None,
+):
+    """Public action boundary: require positively verified policy before actions."""
+    from c1_requirement_quality.source_integrity import resolve_workflow_policy, require_refinement_grounding
+    rag, _, manifest, _ = resolve_workflow_policy(workflow_context or grounding_context,
+        artifact=validated_requirements, source_text=srs_text)
+    require_refinement_grounding(manifest)
+    if rag or grounding_context is not None or require_rag:
+        raise ValueError("RAG refinement publication and approval remain blocked until Step 3C.3")
+    return _process_refinement_actions(validated_requirements, actions, srs_text,
+        workflow_records=workflow_records, consistency_context=consistency_context,
+        workflow_context=workflow_context)
+
+
+def _process_refinement_actions(
     validated_requirements: dict[str, Any],
     actions: dict[str, Any],
     srs_text: str,
     *,
     workflow_records: dict[str, Any] | None = None,
     consistency_context: dict[str, Any] | None = None,
+    grounding_context=None,
+    require_rag: bool = False,
+    workflow_context=None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Apply explicit user-authored candidates and decisions to a C1 artifact.
 
@@ -248,6 +306,11 @@ def process_refinement_actions(
     clarification answers. Only schema-approved fields are written to the
     validated requirements object.
     """
+    from c1_requirement_quality.source_integrity import require_refinement_grounding
+    manifest, round_binding = _verify_round_artifact(validated_requirements, workflow_context, srs_text)
+    require_refinement_grounding(manifest)
+    if grounding_context is not None or require_rag:
+        raise ValueError("RAG refinement publication and approval remain blocked until Step 3C.3")
     if not isinstance(validated_requirements, dict) or not isinstance(actions, dict):
         raise ValueError("validated requirements and actions must be JSON objects")
     if validated_requirements.get("contract") != "c1.validated-requirements":
@@ -365,7 +428,7 @@ def process_refinement_actions(
             record = workflow_records.get(requirement_id) if workflow_records else None
             candidate_resolution = clarification_resolution(record, original_text, questions)
             candidate_escalation = bool(record.get("escalation_active") if record else requirement.get("tier") == "TIER_3_ESCALATE")
-            evaluation = _evaluate_candidate(candidate["text"], srs_text, original_text, record, source_format=source_format)
+            evaluation = _evaluate_candidate(candidate["text"], srs_text, original_text, record, source_format=source_format, workflow_context=workflow_context)
             candidate_consistency = _consistency_with_candidate(
                 requirement_id, candidate["text"], baseline_requirements, workflow_records, consistency_context
             )
@@ -404,7 +467,7 @@ def process_refinement_actions(
 
         if decision in {"approved", "edited"}:
             final_text = candidate_by_id[selected_id]
-            evaluation = _evaluate_candidate(final_text, srs_text, source_format=source_format)
+            evaluation = _evaluate_candidate(final_text, srs_text, source_format=source_format, workflow_context=workflow_context)
             checks = requirement.setdefault("validation", {}).setdefault("checks", {})
             checks["quality"] = evaluation["quality_check"]
             checks["grounding"] = evaluation["grounding_check"]
@@ -473,7 +536,7 @@ def process_refinement_actions(
         final_text = requirement.get("final_text", requirement.get("original_text"))
         final_findings = analyse_requirement(final_text)
         record = workflow_records.get(requirement_id) if workflow_records else None
-        evaluation = _evaluate_candidate(final_text, srs_text, requirement["original_text"], record, source_format=source_format)
+        evaluation = _evaluate_candidate(final_text, srs_text, requirement["original_text"], record, source_format=source_format, workflow_context=workflow_context)
         final_grounding = evaluation["grounding"]
         resolution = clarification_resolution(record, requirement["original_text"], list(requirement.get("clarification_questions") or []))
         unresolved = resolution["unresolved_questions"]
@@ -543,7 +606,7 @@ def process_refinement_actions(
             # Current candidate diagnostics use the complete final peer set,
             # not stale pre-action peers from an earlier snapshot.
             for candidate in diagnostic["candidates"]:
-                candidate_evaluation = _evaluate_candidate(candidate["text"], srs_text, requirement["original_text"], record, source_format=source_format)
+                candidate_evaluation = _evaluate_candidate(candidate["text"], srs_text, requirement["original_text"], record, source_format=source_format, workflow_context=workflow_context)
                 candidate_consistency = _consistency_with_candidate(requirement_id, candidate["text"], output["requirements"], workflow_records, consistency_context)
                 candidate_tier = classify_tier(
                     candidate_evaluation["quality_findings"], candidate_evaluation["grounding"], candidate_consistency,
@@ -585,4 +648,10 @@ def process_refinement_actions(
     for diagnostic in diagnostics:
         diagnostic["consistency_analysis"] = final_analysis
 
-    return output, diagnostics
+    # Only successful processing may issue a continuation. Keep its identity and
+    # exact content outside caller-editable metadata and release it with the result.
+    result = _RefinementArtifact(output)
+    key = id(result)
+    reference = weakref.ref(result, lambda _: _ROUND_ARTIFACTS.pop(key, None))
+    _ROUND_ARTIFACTS[key] = (reference, round_binding, _artifact_digest(result))
+    return result, diagnostics

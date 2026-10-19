@@ -85,7 +85,7 @@ def _req(
 
 
 # T-01: Generates candidates when SRS evidence supports substitution
-def test_generates_candidates_when_srs_evidence_supports_substitution():
+def test_generates_candidates_when_srs_evidence_supports_substitution(verified_legacy):
     srs = "The service shall respond within 2 seconds. The service may respond within 2 seconds."
     req = _req(
         "REQ-EX-001",
@@ -94,7 +94,7 @@ def test_generates_candidates_when_srs_evidence_supports_substitution():
         defects=[{"type": "ambiguous", "detector": "rule", "explanation": "uses weak modal may"}],
     )
     artifact = _minimal_artifact([req])
-    sidecar = generate_candidate_suggestions(artifact, srs)
+    sidecar = generate_candidate_suggestions(artifact, srs, workflow_context=verified_legacy(artifact, srs))
 
     req_out = sidecar["requirements"][0]
     assert req_out["blocked"] is False
@@ -103,11 +103,11 @@ def test_generates_candidates_when_srs_evidence_supports_substitution():
 
 
 # T-02: All generated candidates have distinct texts
-def test_all_generated_candidates_have_different_texts():
+def test_all_generated_candidates_have_different_texts(verified_legacy):
     srs = "The service shall respond within 2 seconds. The service may respond quickly within 2 seconds."
     req = _req("REQ-EX-001", "The service may respond quickly within 2 seconds.", tier=TIER_1)
     artifact = _minimal_artifact([req])
-    sidecar = generate_candidate_suggestions(artifact, srs)
+    sidecar = generate_candidate_suggestions(artifact, srs, workflow_context=verified_legacy(artifact, srs))
 
     cands = sidecar["requirements"][0]["ranked_candidates"]
     texts = [c["text"] for c in cands]
@@ -115,7 +115,7 @@ def test_all_generated_candidates_have_different_texts():
 
 
 # T-03: Unsupported facts are rejected
-def test_unsupported_facts_are_rejected():
+def test_unsupported_facts_are_rejected(verified_legacy):
     class HallucinatingBackend:
         def generate(self, text, defects, evidence_chunks, clarification_answers, *, max_candidates=3):
             return [{
@@ -127,7 +127,7 @@ def test_unsupported_facts_are_rejected():
     srs = "The service may respond within 2 seconds."
     req = _req("REQ-EX-001", "The service may respond within 2 seconds.")
     artifact = _minimal_artifact([req])
-    sidecar = generate_candidate_suggestions(artifact, srs, backend=HallucinatingBackend())
+    sidecar = generate_candidate_suggestions(artifact, srs, backend=HallucinatingBackend(), workflow_context=verified_legacy(artifact, srs))
 
     req_out = sidecar["requirements"][0]
     assert len(req_out["ranked_candidates"]) == 0
@@ -136,7 +136,7 @@ def test_unsupported_facts_are_rejected():
 
 
 # T-04: Quality regression candidate is rejected
-def test_quality_regression_candidate_is_rejected():
+def test_quality_regression_candidate_is_rejected(verified_legacy):
     class RegressingBackend:
         def generate(self, text, defects, evidence_chunks, clarification_answers, *, max_candidates=3):
             return [{
@@ -148,7 +148,7 @@ def test_quality_regression_candidate_is_rejected():
     srs = "The service may respond within 2 seconds."
     req = _req("REQ-EX-001", "The service may respond within 2 seconds.", defects=[{"type": "ambiguous", "detector": "rule", "explanation": "ambiguous"}])
     artifact = _minimal_artifact([req])
-    sidecar = generate_candidate_suggestions(artifact, srs, backend=RegressingBackend())
+    sidecar = generate_candidate_suggestions(artifact, srs, backend=RegressingBackend(), workflow_context=verified_legacy(artifact, srs))
 
     req_out = sidecar["requirements"][0]
     assert len(req_out["ranked_candidates"]) == 0
@@ -156,11 +156,11 @@ def test_quality_regression_candidate_is_rejected():
 
 
 # T-05: Tier 2 open questions block generation
-def test_tier2_open_questions_blocks_generation():
+def test_tier2_open_questions_blocks_generation(verified_legacy):
     srs = "The system shall timeout after [timeout]."
     req = _req("REQ-EX-001", "The system shall timeout after [timeout].", tier=TIER_2)
     artifact = _minimal_artifact([req])
-    sidecar = generate_candidate_suggestions(artifact, srs)
+    sidecar = generate_candidate_suggestions(artifact, srs, workflow_context=verified_legacy(artifact, srs))
 
     req_out = sidecar["requirements"][0]
     assert req_out["blocked"] is True
@@ -170,13 +170,13 @@ def test_tier2_open_questions_blocks_generation():
 
 
 # T-06: Tier 2 with all questions answered is eligible
-def test_tier2_with_all_questions_answered_is_eligible():
+def test_tier2_with_all_questions_answered_is_eligible(verified_legacy):
     srs = "The system shall timeout after [timeout]."
     req = _req("REQ-EX-001", "The system shall timeout after [timeout].", tier=TIER_2)
     artifact = _minimal_artifact([req])
     q = clarification_questions_for("The system shall timeout after [timeout].")[0]
     answers = [{"question": q, "answer": "2 seconds"}]
-    sidecar = generate_candidate_suggestions(artifact, srs, clarification_answers=answers)
+    sidecar = generate_candidate_suggestions(artifact, srs, clarification_answers=answers, workflow_context=verified_legacy(artifact, srs))
 
     req_out = sidecar["requirements"][0]
     assert req_out["blocked"] is False
@@ -185,11 +185,11 @@ def test_tier2_with_all_questions_answered_is_eligible():
 
 
 # T-07: Tier 3 conflict blocks generation
-def test_tier3_conflict_blocks_generation():
+def test_tier3_conflict_blocks_generation(verified_legacy):
     srs = "Requirements with conflict."
     req = _req("REQ-EX-001", "The system shall lock after 3 attempts.", tier=TIER_3, consistency_status="conflict")
     artifact = _minimal_artifact([req])
-    sidecar = generate_candidate_suggestions(artifact, srs)
+    sidecar = generate_candidate_suggestions(artifact, srs, workflow_context=verified_legacy(artifact, srs))
 
     req_out = sidecar["requirements"][0]
     assert req_out["blocked"] is True
@@ -198,11 +198,11 @@ def test_tier3_conflict_blocks_generation():
 
 
 # T-08: Human approval is never set automatically
-def test_human_approval_never_set_automatically():
+def test_human_approval_never_set_automatically(verified_legacy):
     srs = "The service shall respond within 2 seconds. The service may respond within 2 seconds."
     req = _req("REQ-EX-001", "The service may respond within 2 seconds.")
     artifact = _minimal_artifact([req])
-    sidecar = generate_candidate_suggestions(artifact, srs)
+    sidecar = generate_candidate_suggestions(artifact, srs, workflow_context=verified_legacy(artifact, srs))
 
     assert "human_decision" not in sidecar
     assert "bdd_ready" not in sidecar
@@ -212,7 +212,7 @@ def test_human_approval_never_set_automatically():
 
 
 # T-09: Ranking has explicit score breakdown
-def test_ranking_has_explicit_score_breakdown():
+def test_ranking_has_explicit_score_breakdown(verified_legacy):
     srs = "The service shall respond within 2 seconds. The service may respond within 2 seconds."
     req = _req(
         "REQ-EX-001",
@@ -220,7 +220,7 @@ def test_ranking_has_explicit_score_breakdown():
         defects=[{"type": "ambiguous", "detector": "rule", "explanation": "ambiguous"}],
     )
     artifact = _minimal_artifact([req])
-    sidecar = generate_candidate_suggestions(artifact, srs)
+    sidecar = generate_candidate_suggestions(artifact, srs, workflow_context=verified_legacy(artifact, srs))
 
     cands = sidecar["requirements"][0]["ranked_candidates"]
     assert len(cands) >= 1
@@ -242,11 +242,11 @@ def test_ranking_has_explicit_score_breakdown():
 
 
 # T-10: Original requirement preserved in sidecar
-def test_original_requirement_preserved_in_sidecar():
+def test_original_requirement_preserved_in_sidecar(verified_legacy):
     srs = "The service may respond within 2 seconds."
     req = _req("REQ-EX-001", "The service may respond within 2 seconds.", tier=TIER_1, defects=[{"type": "ambiguous", "detector": "rule", "explanation": "ambiguous"}])
     artifact = _minimal_artifact([req])
-    sidecar = generate_candidate_suggestions(artifact, srs)
+    sidecar = generate_candidate_suggestions(artifact, srs, workflow_context=verified_legacy(artifact, srs))
 
     out_req = sidecar["requirements"][0]
     assert out_req["requirement_id"] == "REQ-EX-001"
@@ -337,7 +337,7 @@ def test_cli_generate_candidates_does_not_mutate_input(tmp_path: Path, archive_t
 
 
 # T-14: Generate then refine integration
-def test_generate_then_refine_integration(tmp_path: Path):
+def test_generate_then_refine_integration(tmp_path: Path, verified_legacy):
     srs_text = "The service shall respond within 2 seconds. The service may respond within 2 seconds."
     srs_file = tmp_path / "test.srs"
     srs_file.write_text(srs_text, encoding="utf-8")
@@ -347,7 +347,7 @@ def test_generate_then_refine_integration(tmp_path: Path):
     _validate_contract_artifact(artifact)
 
     # 1. Generate candidates
-    sidecar = generate_candidate_suggestions(artifact, srs_text)
+    sidecar = generate_candidate_suggestions(artifact, srs_text, workflow_context=verified_legacy(artifact, srs_text))
     ranked = sidecar["requirements"][0]["ranked_candidates"]
     assert len(ranked) >= 1
     selected_text = ranked[0]["text"]
@@ -363,19 +363,19 @@ def test_generate_then_refine_integration(tmp_path: Path):
         }]
     }
 
-    refined, diagnostics = process_refinement_actions(artifact, actions, srs_text)
+    refined, diagnostics = process_refinement_actions(artifact, actions, srs_text, workflow_context=verified_legacy(artifact, srs_text))
     _validate_contract_artifact(refined)
     assert refined["requirements"][0]["final_text"] == selected_text
     assert refined["requirements"][0]["human_decision"] == "approved"
 
 
 # T-15: Insufficient evidence yields empty candidates with reason
-def test_insufficient_evidence_yields_empty_candidates_with_reason():
+def test_insufficient_evidence_yields_empty_candidates_with_reason(verified_legacy):
     # Vague qualifier "quickly" but SRS has no measurable threshold
     srs = "The service shall respond quickly to requests."
     req = _req("REQ-EX-001", "The service shall respond quickly to requests.", defects=[{"type": "vague", "detector": "rule", "explanation": "vague"}])
     artifact = _minimal_artifact([req])
-    sidecar = generate_candidate_suggestions(artifact, srs)
+    sidecar = generate_candidate_suggestions(artifact, srs, workflow_context=verified_legacy(artifact, srs))
 
     req_out = sidecar["requirements"][0]
     assert len(req_out["ranked_candidates"]) == 0
@@ -383,38 +383,38 @@ def test_insufficient_evidence_yields_empty_candidates_with_reason():
 
 
 # T-16: Mismatched clarification answer does not unblock
-def test_mismatched_clarification_answer_does_not_unblock():
+def test_mismatched_clarification_answer_does_not_unblock(verified_legacy):
     srs = "The service shall wait [timeout]."
     req = _req("REQ-EX-001", "The service shall wait [timeout].", tier=TIER_2)
     artifact = _minimal_artifact([req])
     answers = [{"question": "What is the wrong question?", "answer": "2 seconds"}]
-    sidecar = generate_candidate_suggestions(artifact, srs, clarification_answers=answers)
+    sidecar = generate_candidate_suggestions(artifact, srs, clarification_answers=answers, workflow_context=verified_legacy(artifact, srs))
 
     assert sidecar["requirements"][0]["blocked"] is True
     assert sidecar["requirements"][0]["blocked_reason"] == "tier2_open_questions"
 
 
 # T-17: Answer containing placeholder does not resolve question
-def test_answer_containing_placeholder_does_not_resolve_question():
+def test_answer_containing_placeholder_does_not_resolve_question(verified_legacy):
     srs = "The service shall wait [timeout]."
     req = _req("REQ-EX-001", "The service shall wait [timeout].", tier=TIER_2)
     artifact = _minimal_artifact([req])
     q = clarification_questions_for("The service shall wait [timeout].")[0]
     answers = [{"question": q, "answer": "within [TBD] seconds"}]
-    sidecar = generate_candidate_suggestions(artifact, srs, clarification_answers=answers)
+    sidecar = generate_candidate_suggestions(artifact, srs, clarification_answers=answers, workflow_context=verified_legacy(artifact, srs))
 
     assert sidecar["requirements"][0]["blocked"] is True
     assert sidecar["requirements"][0]["blocked_reason"] == "tier2_open_questions"
 
 
 # T-18: Clarification answer provenance recorded as user-supplied
-def test_clarification_answer_provenance_recorded_as_user_supplied():
+def test_clarification_answer_provenance_recorded_as_user_supplied(verified_legacy):
     srs = "The service shall wait [timeout]."
     req = _req("REQ-EX-001", "The service shall wait [timeout].", tier=TIER_2)
     artifact = _minimal_artifact([req])
     q = clarification_questions_for("The service shall wait [timeout].")[0]
     answers = [{"question": q, "answer": "5 seconds"}]
-    sidecar = generate_candidate_suggestions(artifact, srs, clarification_answers=answers)
+    sidecar = generate_candidate_suggestions(artifact, srs, clarification_answers=answers, workflow_context=verified_legacy(artifact, srs))
 
     cands = sidecar["requirements"][0]["ranked_candidates"]
     assert len(cands) == 1
@@ -426,13 +426,13 @@ def test_clarification_answer_provenance_recorded_as_user_supplied():
 
 
 # T-19: Potential conflict excluded from ranking, retained as diagnostic suggestion
-def test_potential_conflict_excluded_from_ranking_retained_as_diagnostic():
+def test_potential_conflict_excluded_from_ranking_retained_as_diagnostic(verified_legacy):
     srs = "The response time shall be at least 2 seconds. The response time shall be at most 1 minutes."
     target = _req("REQ-EX-001", "The response time may be at least 2 seconds.", tier=TIER_1)
     peer = _req("REQ-EX-002", "The response time shall be at most 1 minutes.", tier=TIER_1)
     artifact = _minimal_artifact([target, peer])
 
-    sidecar = generate_candidate_suggestions(artifact, srs)
+    sidecar = generate_candidate_suggestions(artifact, srs, workflow_context=verified_legacy(artifact, srs))
 
     out_req = sidecar["requirements"][0]
     # Candidate for REQ-EX-001 ("The response time shall be at least 2 seconds.") has potential conflict with REQ-EX-002
@@ -445,11 +445,11 @@ def test_potential_conflict_excluded_from_ranking_retained_as_diagnostic():
 
 
 # T-20: Zero valid candidates reports reason
-def test_zero_valid_candidates_reports_reason():
+def test_zero_valid_candidates_reports_reason(verified_legacy):
     srs = "The system shall perform correctly."
     req = _req("REQ-EX-001", "The system shall perform correctly.")
     artifact = _minimal_artifact([req])
-    sidecar = generate_candidate_suggestions(artifact, srs)
+    sidecar = generate_candidate_suggestions(artifact, srs, workflow_context=verified_legacy(artifact, srs))
 
     req_out = sidecar["requirements"][0]
     assert len(req_out["ranked_candidates"]) == 0
@@ -457,7 +457,7 @@ def test_zero_valid_candidates_reports_reason():
 
 
 # T-21: Ranking tie broken deterministically
-def test_ranking_tie_broken_deterministically():
+def test_ranking_tie_broken_deterministically(verified_legacy):
     class TwoEqualCandidatesBackend:
         def generate(self, text, defects, evidence_chunks, clarification_answers, *, max_candidates=3):
             return [
@@ -477,8 +477,8 @@ def test_ranking_tie_broken_deterministically():
     req = _req("REQ-EX-001", "The service may respond within 2 seconds.")
     artifact = _minimal_artifact([req])
 
-    sidecar1 = generate_candidate_suggestions(artifact, srs, backend=TwoEqualCandidatesBackend())
-    sidecar2 = generate_candidate_suggestions(artifact, srs, backend=TwoEqualCandidatesBackend())
+    sidecar1 = generate_candidate_suggestions(artifact, srs, backend=TwoEqualCandidatesBackend(), workflow_context=verified_legacy(artifact, srs))
+    sidecar2 = generate_candidate_suggestions(artifact, srs, backend=TwoEqualCandidatesBackend(), workflow_context=verified_legacy(artifact, srs))
 
     cands1 = sidecar1["requirements"][0]["ranked_candidates"]
     cands2 = sidecar2["requirements"][0]["ranked_candidates"]
@@ -489,23 +489,23 @@ def test_ranking_tie_broken_deterministically():
 
 
 # T-22: Lexical fallback recorded when RAG unavailable
-def test_rag_candidate_validation_rejected_before_generation():
+def test_rag_candidate_validation_rejected_before_generation(verified_legacy):
     srs = "The service shall respond within 2 seconds."
     req = _req("REQ-EX-001", "The service shall respond within 2 seconds.")
     artifact = _minimal_artifact([req])
     with pytest.raises(ValueError, match="only lexical"):
-        generate_candidate_suggestions(artifact, srs, grounding_mode="rag")
+        generate_candidate_suggestions(artifact, srs, grounding_mode="rag", workflow_context=verified_legacy(artifact, srs))
 
 
 # T-23: Human-confirmed substitution is NOT rejected due to SRS absence
-def test_human_confirmed_substitution_not_rejected_due_to_srs_absence():
+def test_human_confirmed_substitution_not_rejected_due_to_srs_absence(verified_legacy):
     srs = "The system shall timeout after [timeout]."
     req = _req("REQ-EX-001", "The system shall timeout after [timeout].", tier=TIER_2)
     artifact = _minimal_artifact([req])
     q = clarification_questions_for("The system shall timeout after [timeout].")[0]
     answers = [{"question": q, "answer": "99 milliseconds"}]
 
-    sidecar = generate_candidate_suggestions(artifact, srs, clarification_answers=answers)
+    sidecar = generate_candidate_suggestions(artifact, srs, clarification_answers=answers, workflow_context=verified_legacy(artifact, srs))
 
     req_out = sidecar["requirements"][0]
     assert req_out["blocked"] is False

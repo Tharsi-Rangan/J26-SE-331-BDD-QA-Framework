@@ -36,7 +36,7 @@ def test_numeric_identity_is_operator_sensitive(left, right):
     assert verify_symbolically(Fact(a), a, "source").outcome == VerificationOutcome.SUPPORTED
 
 
-def test_selected_generation_never_transmits_peer_context():
+def test_selected_generation_never_transmits_peer_context(verified_legacy):
     a = _req("REQ-EX-001", "The system shall send email.")
     b = _req("REQ-EX-002", "The system shall store secret records.")
     a["grounding"]["evidence"][0]["text"] += " " + b["original_text"]
@@ -46,7 +46,7 @@ def test_selected_generation_never_transmits_peer_context():
     answers = [{"requirement_id": a["requirement_id"], "clarification_answers": []},
                {"requirement_id": b["requirement_id"], "clarification_answers": [{"question": "Secret?", "answer": "private-answer"}]}]
     report = generate_candidate_suggestions(artifact, a["original_text"] + "\n" + b["original_text"],
-        backend=backend, requirement_ids=[a["requirement_id"]], clarification_answers=answers)
+        backend=backend, requirement_ids=[a["requirement_id"]], clarification_answers=answers, workflow_context=verified_legacy(artifact, a["original_text"] + "\n" + b["original_text"]))
     assert backend.generate.call_count == 1
     payload = repr(backend.generate.call_args)
     assert a["original_text"] in payload
@@ -55,7 +55,7 @@ def test_selected_generation_never_transmits_peer_context():
     assert artifact == before and not any(r["bdd_ready"] for r in artifact["requirements"])
     backend.generate.reset_mock()
     with pytest.raises(ValueError, match="active artifact"):
-        generate_candidate_suggestions(artifact, "", backend=backend, requirement_ids=["unknown"])
+        generate_candidate_suggestions(artifact, "", backend=backend, requirement_ids=["unknown"], workflow_context=verified_legacy(artifact, ""))
     backend.generate.assert_not_called()
 
 

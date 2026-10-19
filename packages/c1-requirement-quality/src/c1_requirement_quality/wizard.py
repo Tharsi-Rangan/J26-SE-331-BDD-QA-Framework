@@ -1108,7 +1108,7 @@ class Wizard:
                 return
 
         from c1_requirement_quality.clarification_proposals import _context, validate_proposal
-        from c1_requirement_quality.source_integrity import verify_source
+        from c1_requirement_quality.source_integrity import verify_source, VerifiedWorkflowContext
 
         model_name = getattr(backend, "model", "qwen/qwen3.8-27b")
         try:
@@ -1120,6 +1120,7 @@ class Wizard:
                 response["proposal"], context, source_text,
                 rows, state["requirements"][rid],
                 "docx" if session.source.suffix.lower() == ".docx" else None,
+                workflow_context=VerifiedWorkflowContext(session.current, session.source),
             )
         except Exception as err:
             self.tell(f"Groq clarification request failed: {err}")
@@ -1330,14 +1331,20 @@ class Wizard:
             self.tell(f"Unable to load candidate sidecar: {err}")
             return []
 
-    def candidate_assessment(self, session, rid, candidate):
+    def candidate_assessment(self, session, rid, candidate, *, grounding_context=None):
         from .refinement import _evaluate_candidate, _consistency_with_candidate, _candidate_validation
         from .tier_classifier import classify_tier
-        data, text, _, state = session.read()
+        data, text, manifest, state = session.read()
+        from .source_integrity import VerifiedWorkflowContext
+        policy_context = VerifiedWorkflowContext(session.current, session.source)
+        if manifest.get("rag_policy") or grounding_context is not None:
+            from .rag.candidate_validation import context_for_snapshot
+            grounding_context = context_for_snapshot(session.current, session.source, grounding_context)
         row = next(r for r in data["requirements"] if r["requirement_id"] == rid)
         record = state["requirements"][rid]
         evaluation = _evaluate_candidate(candidate["text"], text, row["original_text"], record,
-            source_format="docx" if session.source.suffix.lower() == ".docx" else None)
+            source_format="docx" if session.source.suffix.lower() == ".docx" else None,
+            grounding_context=grounding_context, requirement_id=rid, workflow_context=policy_context)
         consistency = _consistency_with_candidate(rid, candidate["text"], data["requirements"],
             state["requirements"], context_from_state(state))
         unresolved = clarification_resolution(record, row["original_text"], [])["unresolved_questions"]

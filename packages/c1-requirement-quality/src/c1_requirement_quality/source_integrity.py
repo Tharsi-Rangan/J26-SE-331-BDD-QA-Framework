@@ -3,12 +3,48 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, replace
+from dataclasses import asdict, replace, dataclass, field
 from pathlib import Path
 from typing import Any
 
 from c1_requirement_quality.ingest import load_srs_document
 from c1_requirement_quality.ingest.models import NIRDocument
+
+
+@dataclass(frozen=True)
+class VerifiedWorkflowContext:
+    """Paths to reverified local provenance, never a caller-selected policy flag."""
+    input_path: Path
+    source: Path
+    source_scope: str | None = field(default=None, kw_only=True)
+
+    def scoped(self, text: str):
+        return VerifiedWorkflowContext(self.input_path, self.source, source_scope=text)
+
+
+def resolve_workflow_policy(context, *, artifact=None, source_text=None):
+    """Resolve policy only from sealed source/workflow provenance on every call."""
+    if not isinstance(context, VerifiedWorkflowContext):
+        raise ValueError("Verified workflow context required; provenance is unknown")
+    text, manifest = verify_source(context.input_path, context.source)
+    from c1_requirement_quality.workflow_persistence import load_state
+    from c1_requirement_quality.contract import validate_contract_artifact
+    state, current_manifest = load_state(context.input_path, context.source)
+    current = json.loads(context.input_path.read_text(encoding="utf-8-sig"))
+    validate_contract_artifact(current)
+    if current_manifest != manifest or (artifact is not None and artifact != current):
+        raise ValueError("Workflow provenance or parent artifact mismatch")
+    rag = "rag_policy" in manifest
+    if not rag and any((context.input_path.parent / name).exists() for name in
+                       ("rag_diagnostics.json", "internal/rag_provenance.json")):
+        raise ValueError("RAG provenance exists without its mandatory manifest policy")
+    if context.source_scope is not None:
+        if rag or any(line.strip() not in text for line in context.source_scope.splitlines() if line.strip()):
+            raise ValueError("Unverified evidence scope")
+        text = context.source_scope
+    if source_text is not None and source_text != text:
+        raise ValueError("Evaluation source does not match verified workflow source")
+    return rag, text, manifest, state
 
 
 def sha256(data: bytes) -> str:

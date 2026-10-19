@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from c1_requirement_quality.refinement import (
-    clarification_questions_for, process_refinement_actions, stable_candidate_id,
+    clarification_questions_for, stable_candidate_id,
 )
 from c1_requirement_quality.source_integrity import sha256, verify_source
 from c1_requirement_quality.validation_lifecycle import original_assessments, clarification_resolution, validation_signature
@@ -340,6 +340,17 @@ def current_answer_actions(state: dict[str, Any]) -> list[dict[str, Any]]:
 def refine_with_history(artifact: dict[str, Any], actions: dict[str, Any], source_text: str,
                         parent: dict[str, Any], parent_path: Path, final_c1_dir: Path,
                         manifest: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    from c1_requirement_quality.source_integrity import require_refinement_grounding, VerifiedWorkflowContext, resolve_workflow_policy
+    source = parent_path.parent / "internal" / manifest["archived_source"]
+    policy_context = VerifiedWorkflowContext(parent_path, source)
+    _, _, verified_manifest, verified_parent = resolve_workflow_policy(policy_context, artifact=artifact, source_text=source_text)
+    if verified_manifest != manifest or manifest.get("workflow_sha256") is not None and verified_parent != parent:
+        raise ValueError("Unverified workflow parent or manifest")
+    # Unsealed legacy adoption constructs fresh event IDs. Adopt only history
+    # reconstructed from verified source/diagnostics, never the caller's copy.
+    parent = verified_parent
+    require_refinement_grounding(verified_manifest)
+    from c1_requirement_quality.refinement import _process_refinement_actions
     if (set(actions) - {"requirements", "consistency_reviews"} or "requirements" not in actions
             or not isinstance(actions["requirements"], list)):
         raise ValueError("Actions require requirements and optional consistency_reviews lists")
@@ -484,8 +495,8 @@ def refine_with_history(artifact: dict[str, Any], actions: dict[str, Any], sourc
                 action["human_decision"] = "pending"
                 _event(state, rid, "approval_invalidated", "system", {"reason": "Consistency review basis changed"})
         if basis is not None: state["requirements"][rid]["consistency_review_basis"] = basis
-    refined, diagnostics = process_refinement_actions(artifact, {"requirements": prepared}, source_text,
-        workflow_records=state["requirements"], consistency_context=review_context)
+    refined, diagnostics = _process_refinement_actions(artifact, {"requirements": prepared}, source_text,
+        workflow_records=state["requirements"], consistency_context=review_context, workflow_context=policy_context)
     # Re-evaluate after accepted edits change the final peer set. Reset stale
     # approvals before publication, including approvals on the other endpoint.
     for _ in range(len(rows) + 2):
@@ -511,8 +522,8 @@ def refine_with_history(artifact: dict[str, Any], actions: dict[str, Any], sourc
                 _event(state, rid, "approval_invalidated", "system", {"reason": "Final consistency review basis changed"})
             if basis is not None: state["requirements"][rid]["consistency_review_basis"] = basis
         if not changed and not reset: break
-        refined, diagnostics = process_refinement_actions(refined, {"requirements": reset}, source_text,
-            workflow_records=state["requirements"], consistency_context=current_context)
+        refined, diagnostics = _process_refinement_actions(refined, {"requirements": reset}, source_text,
+            workflow_records=state["requirements"], consistency_context=current_context, workflow_context=policy_context)
     else:
         raise ValueError("Consistency approval invalidation did not converge; snapshot not published")
     for row in refined["requirements"]:

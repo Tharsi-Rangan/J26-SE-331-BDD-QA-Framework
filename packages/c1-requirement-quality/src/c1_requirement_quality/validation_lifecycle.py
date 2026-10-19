@@ -92,7 +92,22 @@ def clarification_resolution(record: dict[str, Any] | None, original: str,
 
 
 def grounded_current(text: str, srs_text: str, original: str | None = None,
-                     record: dict[str, Any] | None = None, *, source_format: str | None = None) -> dict[str, Any]:
+                     record: dict[str, Any] | None = None, *, source_format: str | None = None,
+                     grounding_context=None, requirement_id: str | None = None,
+                     require_rag: bool = False, workflow_context=None) -> dict[str, Any]:
+    from c1_requirement_quality.source_integrity import resolve_workflow_policy
+    try:
+        rag, _, _, _ = resolve_workflow_policy(workflow_context or grounding_context, source_text=srs_text)
+    except (ValueError, OSError, KeyError, TypeError) as error:
+        return {"authority": "unverified", "status": "unsupported", "verdict": "ERROR",
+                "evidence": [], "diagnostics": [], "errors": [str(error)],
+                "eligible_for_acceptance": False, "completion_status": "incomplete"}
+    if grounding_context is not None:
+        return grounding_context.assess(requirement_id, text, srs_text, original, record)
+    if rag or require_rag:
+        return {"authority": "rag", "status": "unsupported", "verdict": "ERROR",
+                "evidence": [], "diagnostics": [], "errors": ["Mandatory candidate RAG context missing"],
+                "eligible_for_acceptance": False, "completion_status": "incomplete"}
     source = analyse_grounding(text, srs_text, source_format=source_format)
     result = copy.deepcopy(source)
     result.update(srs_evidence=copy.deepcopy(source["evidence"]), human_clarification_evidence=[],

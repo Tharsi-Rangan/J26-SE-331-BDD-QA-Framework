@@ -99,11 +99,11 @@ def test_missing_fields_and_truncated_generation_rejected(transport):
         GroqGeneratorBackend(KEY, MODEL).generate("The system shall send email.", [], [], [])
 
 
-def test_existing_grounding_veto_and_human_boundaries(transport):
+def test_existing_grounding_veto_and_human_boundaries(transport, verified_legacy):
     transport["body"] = envelope(measurable_rewrite="The system shall delete all accounts.")
     artifact = _minimal_artifact([_req("REQ-EX-001", "The system shall send email.")])
     original = copy.deepcopy(artifact)
-    sidecar = generate_candidate_suggestions(artifact, "The system shall send email.", backend=GroqGeneratorBackend(KEY, MODEL))
+    sidecar = generate_candidate_suggestions(artifact, "The system shall send email.", backend=GroqGeneratorBackend(KEY, MODEL), workflow_context=verified_legacy(artifact, "The system shall send email."))
     assert artifact == original
     row = sidecar["requirements"][0]
     assert row["requirement_id"] == "REQ-EX-001" and row["original_text"] == original["requirements"][0]["original_text"]
@@ -113,14 +113,14 @@ def test_existing_grounding_veto_and_human_boundaries(transport):
     assert artifact["requirements"][0]["bdd_ready"] is False
 
 
-def test_source_supported_candidate_stays_proposal_only(transport):
+def test_source_supported_candidate_stays_proposal_only(transport, verified_legacy):
     original = "The service may respond within 2 seconds."
     candidate = "The service shall respond within 2 seconds."
     transport["body"] = envelope(measurable_rewrite=candidate)
     artifact = _minimal_artifact([_req("REQ-EX-001", original,
-        defects=[{"type": "ambiguous", "explanation": "weak modal"}])])
+        defects=[{"type": "ambiguous", "detector": "rule", "explanation": "weak modal"}])])
     sidecar = generate_candidate_suggestions(artifact, original + "\n" + candidate,
-                                             backend=GroqGeneratorBackend(KEY, MODEL))
+                                             backend=GroqGeneratorBackend(KEY, MODEL), workflow_context=verified_legacy(artifact, original + "\n" + candidate))
     assert sidecar["requirements"][0]["ranked_candidates"]
     assert artifact["requirements"][0]["final_text"] == original
     assert artifact["requirements"][0]["human_decision"] == "pending"
