@@ -223,6 +223,7 @@ export function readC3Inputs(inDir: string): C3Inputs {
       scenarioId: m.scenario_id,
       requirementId: m.requirement_id,
       scenarioName: m.scenario_name,
+      featureName: f.name,
       scenarioType: m.scenario_type,
       isOutline: m.is_outline,
       featureFile: m.feature_file,
