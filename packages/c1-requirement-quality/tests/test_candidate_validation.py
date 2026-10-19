@@ -185,13 +185,13 @@ def test_preflight_or_midrun_model_change_never_publishes(context, failure):
 
 def test_stale_workflow_basis(context, monkeypatch):
     receipt = publish(context)
-    original = service.load_state
+    original = service._verify_snapshot
     def changed(*args):
-        state, manifest = original(*args)
+        text, manifest, artifact, state = original(*args)
         state = copy.deepcopy(state)
         state["requirements"][context[2]]["clarification_requested"] = True
-        return state, manifest
-    monkeypatch.setattr(service, "load_state", changed)
+        return text, manifest, artifact, state
+    monkeypatch.setattr(service, "_verify_snapshot", changed)
     with pytest.raises(ValueError, match="binding"):
         load(context, receipt)
 
@@ -323,28 +323,28 @@ def test_incorrect_requirement_binding_rejected(context):
 
 def test_parent_snapshot_binding_rejected(context, monkeypatch):
     receipt = publish(context)
-    original = service.load_state
+    original = service._verify_snapshot
     def changed(*args):
-        state, manifest = original(*args)
+        text, manifest, artifact, state = original(*args)
         state = copy.deepcopy(state)
         state["snapshot_id"] = "SNAPSHOT-OTHER"
-        return state, manifest
-    monkeypatch.setattr(service, "load_state", changed)
+        return text, manifest, artifact, state
+    monkeypatch.setattr(service, "_verify_snapshot", changed)
     with pytest.raises(ValueError, match="binding"):
         load(context, receipt)
 
 
 def test_workflow_mutation_during_validation_prevents_publication(context, monkeypatch):
-    original = service.load_state
+    original = service._verify_snapshot
     changed = []
     context[4]["after_analysis"] = lambda: changed.append(True)
     def current(*args):
-        state, manifest = original(*args)
+        text, manifest, artifact, state = original(*args)
         if changed:
             state = copy.deepcopy(state)
             state["requirements"][context[2]]["clarification_requested"] = True
-        return state, manifest
-    monkeypatch.setattr(service, "load_state", current)
+        return text, manifest, artifact, state
+    monkeypatch.setattr(service, "_verify_snapshot", current)
     with pytest.raises(ValueError, match="context changed"):
         publish(context)
     assert not context[3].exists()

@@ -14,7 +14,7 @@ from c1_requirement_quality.contract import validate_contract_artifact
 from c1_requirement_quality.lexical_patterns import PLACEHOLDER_PATTERN
 from c1_requirement_quality.ml.ml_diagnostics import _require_memory
 from c1_requirement_quality.refinement import stable_candidate_id
-from c1_requirement_quality.source_integrity import sha256, verify_source, VerifiedWorkflowContext
+from c1_requirement_quality.source_integrity import sha256, verify_source, VerifiedWorkflowContext, _verify_snapshot
 from c1_requirement_quality.workflow_persistence import load_state
 from c1_requirement_quality.rag.rag_grounding_analyser import RAGGroundingAnalyser
 
@@ -90,7 +90,9 @@ class CandidateGroundingContext(VerifiedWorkflowContext):
     analyser_factory: Callable[..., Any] = RAGGroundingAnalyser
 
     def check_parent(self, artifact: dict[str, Any]) -> None:
-        if artifact != json.loads(self.input_path.read_text(encoding="utf-8-sig")):
+        _, _, authenticated, _ = _verify_snapshot(self.input_path, self.source)
+        validate_contract_artifact(authenticated)
+        if _canonical(artifact) != _canonical(authenticated):
             raise ValueError("Candidate grounding context belongs to a different parent artifact")
 
     def assess(self, requirement_id: str, candidate: str, srs_text: str,
@@ -98,21 +100,21 @@ class CandidateGroundingContext(VerifiedWorkflowContext):
         """Verify fresh evidence and meaning; do not infer, rank or publish decisions."""
         meaning = {"status": "unassessed"}
         try:
-            text, _ = _context(self.input_path, self.source, requirement_id, candidate, self.top_k)
-            artifact = json.loads(self.input_path.read_text(encoding="utf-8-sig"))
-            row = next(r for r in artifact["requirements"] if r["requirement_id"] == requirement_id)
-            state, _ = load_state(self.input_path, self.source)
+            text, binding, row, state = _candidate_snapshot(
+                self.input_path, self.source, requirement_id, candidate, self.top_k)
             if (text != srs_text or row["original_text"] != original
                     or workflow_record is not None and workflow_record != state["requirements"][requirement_id]):
                 raise ValueError("Candidate evaluation source, original text or workflow basis mismatch")
-            meaning = compare_meaning(original, candidate)
-            reference = self.receipts.get(stable_candidate_id(requirement_id, candidate))
+            meaning = compare_meaning(row["original_text"], candidate)
+            reference = self.receipts.get(binding["candidate_id"])
             if reference is None:
                 raise ValueError("Mandatory candidate RAG evidence receipt missing")
             path, digest = reference
             record = load_candidate_validation(path, self.input_path, self.source,
                 requirement_id, candidate, expected_sha256=digest, top_k=self.top_k,
                 analyser_factory=self.analyser_factory)
+            if record["binding"] != binding:
+                raise ValueError("Candidate evaluation context changed while loading evidence")
             result = dict(record["grounding"])
             verdict = record["verdict"]
             result.update(authority="rag", verdict=verdict,
@@ -146,26 +148,28 @@ def _canonical(value: Any) -> bytes:
 
 def _context(input_path: Path, source: Path, requirement_id: str,
              candidate_text: str, top_k: int) -> tuple[str, dict[str, Any]]:
+    text, binding, _, _ = _candidate_snapshot(input_path, source, requirement_id, candidate_text, top_k)
+    return text, binding
+
+
+def _candidate_snapshot(input_path: Path, source: Path, requirement_id: str,
+                        candidate_text: str, top_k: int):
+    """Bind candidate facts and identity to one authenticated parsed snapshot."""
     if not isinstance(candidate_text, str) or not candidate_text.strip():
         raise ValueError("Candidate text must be nonempty")
     if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k <= 0:
         raise ValueError("top_k must be a positive integer")
-    raw = input_path.read_bytes()
-    artifact = json.loads(raw.decode("utf-8-sig"))
+    text, manifest, artifact, state = _verify_snapshot(input_path, source)
     validate_contract_artifact(artifact)
-    text, manifest = verify_source(input_path, source)
-    state, _ = load_state(input_path, source)
     rows = [r for r in artifact["requirements"] if r["requirement_id"] == requirement_id]
     if len(rows) != 1:
         raise ValueError("Requirement ID must identify exactly one source requirement")
-    if input_path.read_bytes() != raw:
-        raise ValueError("Parent artifact changed during context validation")
     return text, {
         "requirement_id": requirement_id,
         "original_text_sha256": sha256(rows[0]["original_text"].encode("utf-8")),
         "candidate_id": stable_candidate_id(requirement_id, candidate_text),
         "candidate_text_sha256": sha256(candidate_text.encode("utf-8")),
-        "parent_artifact_sha256": sha256(raw), "snapshot_id": state["snapshot_id"],
+        "parent_artifact_sha256": manifest["artifact_sha256"], "snapshot_id": state["snapshot_id"],
         "source_manifest_sha256": sha256(_canonical(manifest)),
         "document_id": manifest["document_id"], "source_sha256": manifest["sha256"],
         "normalized_sha256": manifest["normalized_sha256"],
@@ -173,7 +177,7 @@ def _context(input_path: Path, source: Path, requirement_id: str,
         "workflow_basis_sha256": sha256(_canonical(state)),
         "policy": POLICY, "retrieval": {"top_k": top_k, "use_spacy": False},
         "verification_policy": verification_policy(),
-    }
+    }, rows[0], state
 
 
 def _verdict(result: dict[str, Any]) -> str:

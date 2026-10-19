@@ -73,13 +73,13 @@ def test_unusable_evidence_is_ineligible(context, monkeypatch, failure):
     elif failure == "model":
         context[4]["models"]["nli"]["asset_sha256"]["weights"] = "changed"
     elif failure == "workflow":
-        original = service.load_state
+        original = service._verify_snapshot
         def changed(*args):
-            state, manifest = original(*args)
+            text, manifest, artifact, state = original(*args)
             state = copy.deepcopy(state)
             state["requirements"][context[2]]["clarification_requested"] = True
-            return state, manifest
-        monkeypatch.setattr(service, "load_state", changed)
+            return text, manifest, artifact, state
+        monkeypatch.setattr(service, "_verify_snapshot", changed)
     result = evaluate(context, gc)
     assert not result["candidate_eligible"]
     assert result["grounding"]["verdict"] == "ERROR"
