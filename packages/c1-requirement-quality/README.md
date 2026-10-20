@@ -308,13 +308,31 @@ consistency for the complete final-text set after all human decisions.
 
 The analyzer reports a confirmed `conflict` only for (a) the same normalized
 obligation and condition with opposite explicit `shall`/`must` negation or a
-narrow supported opposing action verb, or (b) explicit numeric bounds on the
+narrow supported opposing action verb, (b) explicit numeric bounds on the
 same normalized attribute, unit, and condition whose allowed intervals do not
-overlap. Compatible explicit bounds and identical normalized obligations are
+overlap, or (c) different values assigned by the same supported authoritative
+policy-definition template. The latter is internally a
+`policy_definition_disagreement`, requiring human resolution without selecting
+either value as correct. Compatible explicit bounds and identical normalized obligations are
 reported `consistent`. Missing/different units create `potential_conflict`;
 different conditions, unrelated text, unsupported wording, and comparisons
 that do not match a rule remain internally `unassessed`. No similarity score,
 general semantic guess, or model is used.
+
+Stage B recognizes number words zero through twenty only within supported
+numeric bounds with known units or the narrow policy-definition templates.
+For example, the same student's permission to borrow a maximum of three versus
+five books at a time is a policy disagreement; two independent `at most` bounds
+can still overlap. Unsupported definition forms, roles, predicates, units or
+conditions remain unassessed. Numeric normalization never changes source text
+or evidence offsets.
+
+Human pair review can select verified DOCX paragraph context such as C-04.
+Archive/NIR hashes, re-ingested document labels, paragraph coordinates and
+explicit references to both source requirement labels establish its provenance.
+Context is supplemental review evidence and never enters the deterministic
+decision rule. Missing context cannot establish a conflict, and a context note
+cannot overrule compatible bounds. See [Stage B policy and limits](docs/section2-stageb-consistency.md).
 
 The frozen contract has no `unassessed` status and no structured evidence-span
 field for consistency. C1 retains the true analysis state and spans in its
@@ -348,7 +366,7 @@ recalculates tiers after all selected final texts are known.
 | --- | --- | --- |
 | `TIER_1_AUTO_REFINE` | No quality findings; attributable supported evidence; resolved validation questions; and consistent peers or a verified no-peer case. Unreviewed candidates must preserve content after whitespace normalization; explicitly reviewed current semantic rewrites may qualify after all independent gates pass. | Initial automatic edits remain structural-only. Current qualification does not generate, approve, or authorize further semantic edits. |
 | `TIER_2_CLARIFY` | Any quality finding; unsupported, partial, missing, or untraceable grounding; or any potential/unassessed peer comparison. | Human review or clarification is needed before adding or changing facts or behavior. |
-| `TIER_3_ESCALATE` | A confirmed pairwise contradiction, including a grounding contradiction corroborated by the deterministic consistency rules. | Human resolution is required before proceeding. |
+| `TIER_3_ESCALATE` | A confirmed pairwise contradiction, including a corroborated grounding contradiction, or a supported authoritative policy-definition disagreement. | Human resolution is required before proceeding; a policy disagreement selects neither value as correct. |
 
 Conflict evidence takes precedence over other findings. Tier is not computed
 from defect count or the severity/priority labels. An unassessed pair cannot
@@ -357,11 +375,11 @@ reach Tier 1 only when quality findings are empty and grounding is supported
 by traceable evidence. Tier does not set validation status, human decision, or
 `bdd_ready`; those safeguards remain independent.
 
-Under the current team direction, Tier 3 is reserved for confirmed
-contradictions. The existing analyses do not define an objective threshold
+Under the approved Stage B scope, Tier 3 covers confirmed contradictions and
+the narrow supported policy-definition disagreements above. The existing analyses do not define an objective threshold
 for calling a standalone quality defect “too broken”; such defects currently
 require clarification under Tier 2 unless a supported contradiction is also
-found. A new non-contradiction Tier 3 trigger requires a separate policy decision.
+found. Further Tier 3 triggers require a separate policy decision.
 The rule-based analyzer also cannot establish that a requirement is globally
 defect-free; Tier 1 means only that the implemented checks found no blocker.
 

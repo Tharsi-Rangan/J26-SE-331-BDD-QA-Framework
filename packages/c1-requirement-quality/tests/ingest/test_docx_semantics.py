@@ -146,15 +146,16 @@ def test_mini_grounding_with_offline_models_and_sealed_source(mini_source, tmp_p
         assert (root / "internal/source/source.docx").read_bytes() == before
         normalized.append((root / "internal/normalized_ingestion.json").read_bytes())
         assert all(not r["bdd_ready"] and r["human_decision"] == "pending" for r in data["requirements"])
-        # The placeholder must remain unresolved in RAG; the two loan policies
-        # remain outside deterministic consistency coverage in this stage.
+        # Grounding remains independent of the Stage B policy disagreement.
+        # The placeholder must remain unresolved in RAG.
         for row in data["requirements"][:12]:
             if mode == "rag" and row["requirement_id"] == "REQ-EX-004":
                 assert row["grounding"]["status"] == "unsupported"
                 continue
             assert row["grounding"]["status"] == "supported"
             assert any("LIB-" in e["text"] and e["text"] in text for e in row["grounding"]["evidence"])
-        assert all(r["consistency"]["status"] == "potential_conflict" for r in data["requirements"])
+        assert all(r["consistency"]["status"] == ("conflict" if r["requirement_id"] in {"REQ-EX-007", "REQ-EX-008"}
+                   else "potential_conflict") for r in data["requirements"])
         if mode == "rag":
             diagnostics = json.loads((root / "rag_diagnostics.json").read_text(encoding="utf-8"))
             assert all(not row["errors"] for row in diagnostics)

@@ -37,7 +37,8 @@ def classify_tier(
     This assessment does not grant approval or authorize further semantic edits.
     Tier 2 is used whenever
     clarification or further evidence may be needed. Tier 3 is reserved for
-    explicit supported contradictions; the current analyses provide no
+    explicit supported contradictions or supported policy-definition
+    disagreements; the current analyses provide no
     approved standalone threshold for calling other defects ``too broken``.
     """
     if isinstance(quality_findings, (str, bytes)):
@@ -67,7 +68,7 @@ def classify_tier(
         reasons: list[dict[str, Any]] = []
         for pair in conflicts:
             reasons.append({
-                "kind": "confirmed_requirement_conflict",
+                "kind": "confirmed_policy_conflict" if pair.get("conflict_kind") == "policy_definition_disagreement" else "confirmed_requirement_conflict",
                 "explanation": str(pair.get("explanation", "Explicit contradiction detected.")),
                 "requirement_ids": list(pair.get("requirement_ids", [])),
                 "evidence": [dict(item) for item in pair.get("evidence", []) if isinstance(item, Mapping)],
@@ -82,7 +83,9 @@ def classify_tier(
             })
         return _assessment(
             TIER_3,
-            "A supported contradiction requires human resolution before proceeding.",
+            ("Conflicting policy definitions require human resolution; neither value is selected as correct."
+             if conflicts and all(p.get("conflict_kind") == "policy_definition_disagreement" for p in conflicts)
+             else "A supported contradiction requires human resolution before proceeding."),
             reasons,
             "assessed",
         )

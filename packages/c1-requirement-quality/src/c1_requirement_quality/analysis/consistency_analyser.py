@@ -1,28 +1,35 @@
 """Conservative deterministic cross-requirement consistency checks.
 
 Only explicit, text-grounded patterns are classified as consistent or
-contradictory. Unsupported comparisons remain unassessed for human review.
+conflicting. Unsupported comparisons remain unassessed for human review.
 """
 
 from __future__ import annotations
 
 import itertools
 import re
+from decimal import Decimal
 from collections.abc import Mapping, Sequence
 from typing import Any
 from c1_requirement_quality.lexical_patterns import COMPARISON_TOKEN_PATTERN
 
 
 _TOKEN = COMPARISON_TOKEN_PATTERN
+POLICY_VERSION = "deterministic-consistency-policy-definitions-v2"
+_NUMBER_WORDS = dict(zip(
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty".split(),
+    range(21), strict=True,
+))
+_VALUE = r"(?:\d+(?:\.\d+)?|" + "|".join(_NUMBER_WORDS) + r")(?![\w-])"
 _CONDITION = re.compile(r"\b(?:only\s+)?(?:if|when|unless)\b", re.IGNORECASE)
 _BETWEEN = re.compile(
-    r"\bbetween\s+(?P<low>\d+(?:\.\d+)?)\s+and\s+(?P<high>\d+(?:\.\d+)?)"
+    rf"\bbetween\s+(?P<low>{_VALUE})\s+and\s+(?P<high>{_VALUE})"
     r"(?:\s+(?P<unit>[a-zA-Z%]+))?", re.IGNORECASE,
 )
 _BOUND = re.compile(
     r"(?P<operator>at\s+least|no\s+less\s+than|greater\s+than|more\s+than|"
     r"at\s+most|no\s+more\s+than|less\s+than|under|over|minimum(?:\s+of)?|"
-    r"maximum(?:\s+of)?|>=|<=|>|<)\s*(?P<value>\d+(?:\.\d+)?)"
+    rf"maximum(?:\s+of)?|>=|<=|>|<)\s*(?P<value>{_VALUE})"
     r"(?:\s*(?P<unit>%|[a-zA-Z]+))?", re.IGNORECASE,
 )
 _UNIT_ALIASES = {
@@ -33,8 +40,21 @@ _UNIT_ALIASES = {
     "characters": "character", "chars": "character", "bytes": "byte",
     "requests": "request", "attempts": "attempt", "times": "time",
     "users": "user", "records": "record", "items": "item",
+    "books": "book", "loans": "loan",
     "percent": "%", "percentage": "%",
 }
+_KNOWN_UNITS = set(_UNIT_ALIASES) | set(_UNIT_ALIASES.values())
+# These complete templates assert a permission ceiling or assign a named policy
+# parameter. Ordinary "at most" bounds remain interval constraints.
+_POLICY_DEFINITIONS = (
+    re.compile(rf"(?P<subject>(?:a|an|the) [a-z][a-z0-9 '-]*?)\s+(?:shall|must)\s+be allowed to "
+               rf"(?P<action>borrow|hold|reserve) a maximum of (?P<value>{_VALUE}) "
+               rf"(?P<unit>books?|loans?|items?) at a time"
+               r"(?P<condition> (?:if|when|unless) [^.!?;]+)?\.?", re.I),
+    re.compile(rf"(?P<subject>the (?:maximum|minimum) [a-z][a-z0-9 '-]*?)\s+(?:shall|must)\s+be "
+               rf"(?:exactly )?(?P<value>{_VALUE}) (?P<unit>[a-z]+|%)"
+               r"(?P<condition> (?:if|when|unless) [^.!?;]+)?\.?", re.I),
+)
 _MODAL = frozenset({"shall", "must"})
 _NEGATIVE_MODAL = re.compile(r"\b(?:shall|must)\s+not\b", re.IGNORECASE)
 _OPPOSING_ACTIONS = {
@@ -68,6 +88,24 @@ def _unit_key(unit: str | None) -> str | None:
     return lowered
 
 
+def _number(value: str) -> float:
+    return float(_NUMBER_WORDS[value.lower()]) if value.lower() in _NUMBER_WORDS else float(value)
+
+
+def _policy_definition(text: str) -> dict[str, Any] | None:
+    for template, pattern in enumerate(_POLICY_DEFINITIONS):
+        match = pattern.fullmatch(text.strip())
+        if match is None or match["unit"].lower() not in _KNOWN_UNITS:
+            continue
+        # Only the numeric value and the template's main shall/must assignment
+        # are normalized. Actor, object, units and conditions remain literal.
+        key = (" ".join(match["subject"].casefold().split()), match.groupdict().get("action", "").lower(),
+               match["unit"].lower(), " ".join((match["condition"] or "").casefold().split()))
+        value = match["value"].lower()
+        return {"key": (template, key), "value": Decimal(str(_NUMBER_WORDS[value])) if value in _NUMBER_WORDS else Decimal(value)}
+    return None
+
+
 def _bound_for(operator: str, value: float) -> tuple[float | None, bool, float | None, bool]:
     op = " ".join(operator.lower().split())
     if op in {"at least", "no less than", "minimum", "minimum of", ">="}:
@@ -87,7 +125,10 @@ def _numeric_constraint(text: str) -> dict[str, Any] | None:
         return None
     if between:
         match = between[0]
-        low, high = float(match.group("low")), float(match.group("high"))
+        if (any(match[name].lower() in _NUMBER_WORDS for name in ("low", "high"))
+                and (match["unit"] or "").lower() not in _KNOWN_UNITS):
+            return None
+        low, high = _number(match.group("low")), _number(match.group("high"))
         if low > high:
             return None
         return {
@@ -97,8 +138,10 @@ def _numeric_constraint(text: str) -> dict[str, Any] | None:
             "span": _span(text, match.start(), match.end()),
         }
     match = bounds[0]
+    if match["value"].lower() in _NUMBER_WORDS and (match["unit"] or "").lower() not in _KNOWN_UNITS:
+        return None
     low, low_inclusive, high, high_inclusive = _bound_for(
-        match.group("operator"), float(match.group("value"))
+        match.group("operator"), _number(match.group("value"))
     )
     return {
         "low": low, "low_inclusive": low_inclusive,
@@ -118,6 +161,14 @@ def _numeric_core(text: str, constraint: Mapping[str, Any]) -> tuple[str, ...]:
     body, _ = _condition_parts(without_bound)
     tokens = _tokens(body)
     return tuple(token for token in tokens if token not in _MODAL)
+
+
+def _literal_numeric_scope(text: str, constraint: Mapping[str, Any]) -> str:
+    """Keep identifier punctuation/conditions literal around one bound."""
+    span = constraint["span"]
+    body = text[:span["start_offset"]] + " BOUND " + text[span["end_offset"]:]
+    body = re.sub(r"\b(?:shall|must)\b", "shall", body, count=1, flags=re.I)
+    return " ".join(body.strip().rstrip(".").casefold().split())
 
 
 def _intervals_conflict(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
@@ -158,6 +209,40 @@ def _pair_result(left: Mapping[str, Any], right: Mapping[str, Any]) -> dict[str,
     right_core, right_condition = _condition_parts(right_text)
     left_tokens, right_tokens = _tokens(left_text), _tokens(right_text)
     left_evidence, right_evidence = _span(left_text, 0, len(left_text)), _span(right_text, 0, len(right_text))
+
+    left_policy, right_policy = _policy_definition(left_text), _policy_definition(right_text)
+    if left_policy or right_policy:
+        # Preserve explicit grammatical contradiction without treating an
+        # unsupported definition form as an ordinary compatible upper bound.
+        if not left_policy or not right_policy:
+            ln, rn = _numeric_constraint(left_text), _numeric_constraint(right_text)
+            if (ln and rn and ln["unit"] and ln["unit"] == rn["unit"]
+                    and _literal_numeric_scope(left_text, ln) == _literal_numeric_scope(right_text, rn)
+                    and _intervals_conflict(ln, rn)):
+                return _result(left_id, right_id, "conflict",
+                    "The explicit bounds on the same literal attribute, unit, and condition have no overlapping value.",
+                    ln["span"], rn["span"])
+            known = left_policy or right_policy
+            unknown_text = right_text if left_policy else left_text
+            positive_text = re.sub(r"\b(shall|must)\s+not(?=\s+be\b)", r"\1", unknown_text, count=1, flags=re.I)
+            opposite = _policy_definition(positive_text) if positive_text != unknown_text else None
+            if opposite and opposite["key"] == known["key"] and opposite["value"] == known["value"]:
+                return _result(left_id, right_id, "conflict",
+                    "Explicit opposite grammatical negation of the same policy definition and value under the same literal scope.",
+                    left_evidence, right_evidence)
+        if not left_policy or not right_policy or left_policy["key"] != right_policy["key"]:
+            return _result(left_id, right_id, "unassessed",
+                "Policy definitions have unmatched actors, predicates, objects, units, conditions or definition forms; no equivalence is inferred.",
+                left_evidence, right_evidence)
+        disagrees = left_policy["value"] != right_policy["value"]
+        result = _result(left_id, right_id, "conflict" if disagrees else "consistent",
+            "Conflicting authoritative policy definitions require human resolution. Neither value is selected as correct; this is a policy disagreement, not a proof of disjoint count intervals."
+            if disagrees else "The same explicit policy definition assigns equivalent numeric values.",
+            left_evidence, right_evidence)
+        result.update(comparison_kind="authoritative_policy_definition", human_resolution_required=disagrees)
+        if disagrees:
+            result["conflict_kind"] = "policy_definition_disagreement"
+        return result
 
     if left_tokens == right_tokens:
         return _result(left_id, right_id, "consistent", "The normalized obligations and conditions are identical.", left_evidence, right_evidence)
@@ -229,6 +314,7 @@ def analyse_consistency(requirements: Sequence[Mapping[str, Any]]) -> dict[str, 
     pairs = [_pair_result(left, right) for left, right in itertools.combinations(normalized, 2)]
     incomplete = len(normalized) < 2 or any(pair["analysis_state"] == "unassessed" for pair in pairs)
     return {
+        "policy_version": POLICY_VERSION,
         "analysis_state": "partially_analyzed" if incomplete else "analyzed",
         "requirements_analyzed": len(normalized),
         "pairs_analyzed": sum(pair["analysis_state"] == "analyzed" for pair in pairs),

@@ -11,7 +11,7 @@ POLICY = "human-consistency-gates-v2"
 NOTICE = "reviewed coverage complete — no applicable interactions established"
 
 
-def context_from_state(state: dict[str, Any]) -> dict[str, Any]:
+def context_from_state(state: dict[str, Any], *, source_context=None) -> dict[str, Any]:
     history = [copy.deepcopy(e["payload"]) for e in state.get("events", [])
                if e["kind"] == "consistency_review_adopted"]
     invalid = {e["payload"]["review_id"] for e in state.get("events", [])
@@ -19,13 +19,14 @@ def context_from_state(state: dict[str, Any]) -> dict[str, Any]:
     for record in history:
         if record["review_id"] in invalid:
             record["invalidations"] = ["Invalidated in verified workflow history"]
-    return {"source_identity": state["source_identity"], "history": history}
+    return {"source_identity": state["source_identity"], "history": history, "source_context": source_context}
 
 
 def views(rows, records, context):
     from c1_requirement_quality.validation_lifecycle import clarification_resolution
     result = pair_views({"requirements": rows}, context["source_identity"],
-                        {"requirements": records}, context["history"], policy=POLICY)
+                        {"requirements": records}, context["history"], policy=POLICY,
+                        source_context=context.get("source_context"))
     allowed = set()
     for row in rows:
         rid = row["requirement_id"]

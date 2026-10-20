@@ -621,6 +621,9 @@ def write_state(c1_dir: Path, state: dict[str, Any]) -> None:
     source_text = json.loads((c1_dir / "internal/normalized_ingestion.json").read_text(encoding="utf-8"))["raw_text"]
     _validate_state(state, json.loads((c1_dir / "validated_requirements.json").read_text(encoding="utf-8")),
                     state["source_identity"], source_text)
+    from c1_requirement_quality.context_evidence import validate_context_reviews
+    validate_context_reviews(c1_dir, json.loads((c1_dir / "validated_requirements.json").read_text(encoding="utf-8")),
+        state["source_identity"], [e["payload"] for e in state["events"] if e["kind"] == "consistency_review_adopted"])
     path = c1_dir / "internal" / WORKFLOW_FILE
     with path.open("x", encoding="utf-8") as stream:
         json.dump(state, stream, indent=2, ensure_ascii=False)
@@ -781,6 +784,9 @@ def load_state(input_path: Path, source: Path) -> tuple[dict[str, Any], dict[str
             state = json.loads(raw.decode("utf-8"))
             if state.get("artifact_sha256") != manifest["artifact_sha256"]: raise ValueError("Workflow artifact binding mismatch")
             _validate_state(state, artifact, manifest, original_source_text)
+            from c1_requirement_quality.context_evidence import validate_context_reviews
+            validate_context_reviews(current.parent, artifact, state["source_identity"],
+                [e["payload"] for e in state["events"] if e["kind"] == "consistency_review_adopted"])
         if state["snapshot_id"] in seen_ids: raise ValueError("Repeated snapshot identity in lineage")
         seen_ids.add(state["snapshot_id"])
         descendant = "rag_ancestry_version" in manifest
@@ -926,7 +932,8 @@ def refine_with_history(artifact: dict[str, Any], actions: dict[str, Any], sourc
         ids = request.get("requirement_ids")
         if (not isinstance(ids, list) or len(ids) != 2 or any(not isinstance(i, str) for i in ids)
                 or len(set(ids)) != 2): raise ValueError("Two distinct requirement IDs required")
-        matching = [v for v in views(list(rows.values()), state["requirements"], context_from_state(state))
+        matching = [v for v in views(list(rows.values()), state["requirements"],
+                    context_from_state(state, source_context=policy_context))
                     if v["requirement_ids"] == sorted(ids)]
         if len(matching) != 1 or matching[0]["pair_id"] in seen_pairs: raise ValueError("Unknown or repeated pair")
         seen_pairs.add(matching[0]["pair_id"])

@@ -229,6 +229,12 @@ class DemoSession:
             elif event["kind"] == "consistency_review":
                 from c1_requirement_quality.consistency_review import validate_record
                 validate_record(event["record"])
+                if any(ref.startswith("CONTEXT:") for ref in event["record"]["evidence"]):
+                    from c1_requirement_quality.context_evidence import validate_context_reviews
+                    from c1_requirement_quality.source_integrity import _verify_source_local
+                    _, context_manifest, context_artifact = _verify_source_local(self.current, self.source)
+                    validate_context_reviews(self.current.parent, context_artifact,
+                        {k: context_manifest[k] for k in ("document_id", "sha256", "normalized_sha256")}, [event["record"]])
                 previous_reviews = [e["record"] for e in self.events if e["kind"] == "consistency_review"
                                     and e["record"]["pair_id"] == event["record"]["pair_id"]]
                 expected = previous_reviews[-1]["review_id"] if previous_reviews else None
@@ -406,7 +412,9 @@ class DemoSession:
                     or rid != ids[0] or request.get("reviewer") != actor):
                 raise ValueError("Consistency review requirement/reviewer binding mismatch")
             data = self._review_peers(state)
-            pairs = [v for v in views(data, state["requirements"], context_from_state(state))
+            from c1_requirement_quality.source_integrity import VerifiedWorkflowContext
+            pairs = [v for v in views(data, state["requirements"], context_from_state(state,
+                         source_context=VerifiedWorkflowContext(self.current, self.source)))
                      if v["requirement_ids"] == sorted(ids)]
             if len(pairs) != 1:
                 raise ValueError("Unknown consistency pair")
@@ -1027,11 +1035,13 @@ class DemoSession:
 
     def consistency_pairs(self, *, gate_policy: bool = False):
         from c1_requirement_quality.consistency_review import pair_views
+        from c1_requirement_quality.source_integrity import VerifiedWorkflowContext
         data, _, manifest, state = self.read()
+        source_context = VerifiedWorkflowContext(self.current, self.source)
         if gate_policy and manifest.get("rag_policy"):
             from c1_requirement_quality.effective_consistency import context_from_state, views
             state = self.review_read()[3]
-            return views(self._review_peers(state), state["requirements"], context_from_state(state))
+            return views(self._review_peers(state), state["requirements"], context_from_state(state, source_context=source_context))
         history = []
         # Reconstruct sticky invalidation from immutable, verified snapshots.
         # Reverting wording cannot silently resurrect an older human review.
@@ -1049,9 +1059,9 @@ class DemoSession:
                     if view is None or view["binding"] != record["binding"]:
                         record.setdefault("invalidations", []).append({"snapshot_sha256": event["artifact_sha256"],
                             "reason": "Requirement, evidence, source or clarification binding changed"})
-        legacy = pair_views(data, manifest, state, history)
+        legacy = pair_views(data, manifest, state, history, source_context=source_context)
         from c1_requirement_quality.effective_consistency import context_from_state, views
-        context = context_from_state(state)
+        context = context_from_state(state, source_context=source_context)
         if gate_policy or context["history"]:
             current = views(data["requirements"], state["requirements"], context)
             for pair, old in zip(current, legacy, strict=True):

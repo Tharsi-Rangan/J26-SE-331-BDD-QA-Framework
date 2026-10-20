@@ -9,6 +9,7 @@ from typing import Any
 
 from c1_requirement_quality.consistency_analyser import analyse_consistency
 from c1_requirement_quality.pair_applicability import _pair_id
+from c1_requirement_quality.analysis.consistency_analyser import POLICY_VERSION as ANALYSIS_POLICY
 
 POLICY_VERSION = "human-consistency-audit-v1"
 DECISIONS = {"not_applicable", "consistent_within_scope", "conflict_confirmed", "unresolved"}
@@ -20,12 +21,17 @@ def digest(value: Any) -> str:
 
 
 def pair_views(artifact: dict[str, Any], manifest: dict[str, Any], state: dict[str, Any],
-               history: list[dict[str, Any]], *, policy: str = POLICY_VERSION) -> list[dict[str, Any]]:
+               history: list[dict[str, Any]], *, policy: str = POLICY_VERSION, source_context=None) -> list[dict[str, Any]]:
     """Derive validity without modifying historical events or deterministic results."""
     rows = {r["requirement_id"]: r for r in artifact["requirements"]}
     original = analyse_consistency([{"requirement_id": rid, "text": r["original_text"]} for rid, r in rows.items()])
     current = analyse_consistency([{"requirement_id": rid, "text": r["final_text"]} for rid, r in rows.items()])
     original_pairs = {_pair_id(p["requirement_ids"]): p for p in original["pairs"]}
+    contextual = None
+    if source_context is not None and source_context.source.suffix.lower() == ".docx":
+        from c1_requirement_quality.context_evidence import verified_pair_context
+        contextual = verified_pair_context(source_context, list(rows.values()),
+            {k: manifest[k] for k in ("document_id", "sha256", "normalized_sha256")})
     result = []
     for outcome in current["pairs"]:
         ids = sorted(outcome["requirement_ids"])
@@ -51,10 +57,17 @@ def pair_views(artifact: dict[str, Any], manifest: dict[str, Any], state: dict[s
                     if answer["answer_id"] == question["current_answer_id"]:
                         evidence[f"ANSWER:{rid}:{answer['answer_id']}"] = {
                             "kind": "human_clarification_not_original_source", "question": question, "answer": answer}
-        binding_inputs = {"policy_version": policy, "source_identity": {
+        binding_inputs = {"policy_version": policy, "analysis_policy": ANALYSIS_POLICY, "source_identity": {
             k: manifest[k] for k in ("document_id", "sha256", "normalized_sha256")},
             "requirements": inputs, "evidence_sha256": digest(evidence)}
         binding = digest(binding_inputs)
+        # The normalized-source hash already binds the entire context corpus.
+        # Supplemental citations are independently checked against the archive
+        # at creation and replay, and included in the review record's digest.
+        # Keeping them outside the base evidence digest allows non-UI gate
+        # checks to reproduce the same binding without loading display evidence.
+        if contextual is not None:
+            evidence.update(contextual(ids))
         previous = [copy.deepcopy(e) for e in history if e["pair_id"] == pid]
         latest = previous[-1] if previous else None
         stale = latest is not None and (latest["binding"] != binding or bool(latest.get("invalidations")))
