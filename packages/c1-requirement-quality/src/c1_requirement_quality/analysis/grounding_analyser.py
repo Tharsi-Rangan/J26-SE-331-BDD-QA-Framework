@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from c1_requirement_quality.lexical_patterns import COMPARISON_TOKEN_PATTERN
+from c1_requirement_quality.source_comparison import source_comparisons
 
 
 HEADING_PATTERN = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$")
@@ -94,6 +95,16 @@ def _source_claims(srs_text: str, *, source_format: str | None = None) -> list[_
         last_line = block_lines[-1][0]
         chunk_id = f"SRS-L{first_line:04d}-L{last_line:04d}"
         block_text = "".join(line for _, line in block_lines)
+        views = source_comparisons(block_text)
+        if any(view.comparison_text != view.text for view in views):
+            for view in views:
+                # Wrapped source lines are comparison whitespace. Keep the full
+                # literal source block/row as the evidence quotation.
+                for claim in re.split(r"(?<=[.!?])\s+|;", view.comparison_text):
+                    if claim.strip():
+                        claims.append(_SourceClaim(view.text.strip(), chunk_id, section, claim.strip()))
+            block_lines.clear()
+            return
         for index, claim in enumerate(_split_claims(block_text)):
             comparison = None
             if index == 0 and first_line in description_lines:
@@ -120,8 +131,9 @@ def analyse_grounding(candidate_text: str, srs_text: str, *, source_format: str 
 
     The result includes contract-compatible ``status`` and ``evidence`` fields,
     plus standalone diagnostics (``unsupported_claims`` and ``conflicts``).
-    DOCX mode ignores DESC labels only for comparison inside complete functional
-    blocks. Original source text and evidence quotations are never rewritten.
+    Explicit source labels and ID/statement tables use comparison-only views.
+    DOCX mode also recognizes DESC inside complete functional blocks.
+    Original source text and evidence quotations are never rewritten.
     Evidence quotes are exact substrings of ``srs_text``. The line range is
     encoded in each stable chunk ID because the shared evidence schema has no
     separate line-range fields.

@@ -15,6 +15,7 @@ from c1_requirement_quality.rag.model_loading import RAGModelLoadError
 from c1_requirement_quality.model_paths import DEBERTA_NLI_MODEL_NAME, get_deberta_nli_cache_dir
 from c1_requirement_quality.lexical_patterns import COMPARISON_TOKEN_PATTERN
 from c1_requirement_quality.lexical_patterns import PLACEHOLDER_PATTERN
+from c1_requirement_quality.source_comparison import obligation_text, source_comparisons
 
 
 class VerificationOutcome(str, Enum):
@@ -97,21 +98,15 @@ class LocalNLI:
 
 
 def _obligation_text(text: str) -> str:
-    """Remove a leading document label, never an ID inside the obligation.
-
-    Require a known requirement-label vocabulary and an explicit obligation
-    after it. Evidence quotations and retrieval coordinates remain untouched.
-    """
-    return re.sub(
-        r"^\s*(?:FR|NFR|REQ(?:-[A-Z][A-Z0-9]*)?)[- ]\d+(?:[.:)])?\s+"
-        r"(?=(?:The\s+)?[A-Za-z][^\n.!?]*\b(?:shall|must|should|may|can|will)\b)",
-        "", text, count=1, flags=re.I,
-    )
+    """Compatibility alias for the shared source-only comparison policy."""
+    return obligation_text(text)
 
 
-def _tokens(text: str) -> tuple[str, ...]:
+def _tokens(text: str, *, source: bool = False) -> tuple[str, ...]:
     # Ignore only a structural numbered-list prefix, never factual numbers.
-    text = _obligation_text(re.sub(r"^\s*\d+[.)]\s+", "", text))
+    text = re.sub(r"^\s*\d+[.)]\s+", "", text)
+    if source:
+        text = _obligation_text(text)
     return tuple(COMPARISON_TOKEN_PATTERN.findall(text.lower()))
 
 
@@ -128,15 +123,15 @@ def evidence_applicability(fact: Fact, evidence: str) -> str:
     comparisons and entity identifiers remain literal. Unknown paraphrases remain uncertain, never excluded as
     irrelevant or silently declared consistent.
     """
-    def signature(text):
-        return tuple(t for t in _tokens(text) if t not in {
+    def signature(text, *, source=False):
+        return tuple(t for t in _tokens(text, source=source) if t not in {
             "shall", "must", "not", "no", "never", "cannot", "can't", "mustn't", "won't"})
-    return "APPLICABLE" if signature(fact.text) and signature(fact.text) == signature(evidence) else "UNCERTAIN"
+    return "APPLICABLE" if signature(fact.text) and signature(fact.text) == signature(evidence, source=True) else "UNCERTAIN"
 
 
-def _content_signature(text: str) -> tuple[str, ...]:
+def _content_signature(text: str, *, source: bool = False) -> tuple[str, ...]:
     ignored = {"at", "least", "most", "less", "than", "greater", "more", "between", "up", "to", "minimum", "maximum", "of", "and", "not", "no", "never", "cannot", "can't", "mustn't", "won't"}
-    return tuple(t for t in _tokens(text) if t not in ignored and not t[0].isdigit())
+    return tuple(t for t in _tokens(text, source=source) if t not in ignored and not t[0].isdigit())
 
 
 def _constraint_interval(constraint: Any) -> tuple[Decimal | None, bool, Decimal | None, bool] | None:
@@ -197,20 +192,20 @@ def verify_symbolically(fact: Fact, evidence: str, evidence_id: str) -> Verifica
     """Use exact and tightly matched attribute checks; otherwise abstain."""
     if _incomplete(fact.text) or _incomplete(evidence):
         return VerificationResult(VerificationOutcome.INCONCLUSIVE, diagnostic="Unresolved placeholder or missing information")
-    if _tokens(fact.text) == _tokens(evidence):
+    if _tokens(fact.text) == _tokens(evidence, source=True):
         return VerificationResult(VerificationOutcome.SUPPORTED, (evidence_id,))
     # Opposite polarity is only actionable when the token content otherwise matches.
     negators = {"not", "no", "never", "cannot", "can't", "mustn't", "won't"}
     fneg = bool(set(_tokens(fact.text)) & negators)
-    eneg = bool(set(_tokens(evidence)) & negators)
-    if _content_signature(fact.text) == _content_signature(evidence) and fneg != eneg:
+    eneg = bool(set(_tokens(evidence, source=True)) & negators)
+    if _content_signature(fact.text) == _content_signature(evidence, source=True) and fneg != eneg:
         return VerificationResult(VerificationOutcome.CONTRADICTED, (evidence_id,))
 
     # Numeric reasoning requires an unambiguous unit and matching property and
     # condition context. A differing threshold alone is never a contradiction.
     if fact.constraints:
         candidate_sig = _content_signature(fact.text)
-        if candidate_sig and candidate_sig == _content_signature(evidence):
+        if candidate_sig and candidate_sig == _content_signature(evidence, source=True):
             evidence_facts = extract_facts(_obligation_text(evidence), use_spacy=False)
             for candidate_constraint in fact.constraints:
                 for source_fact in evidence_facts:
@@ -252,16 +247,20 @@ class FactVerifier:
         results: list[tuple[str, VerificationResult]] = []
         assessments: list[dict[str, Any]] = []
         uncertain_contradiction = False
-        for item in evidence:
+        for item, view in ((item, view) for item in evidence for view in source_comparisons(item.text)):
             evidence_id = str(item.chunk_id)
-            symbolic = verify_symbolically(fact, item.text, evidence_id)
+            symbolic = verify_symbolically(fact, view.comparison_text, evidence_id)
+            # Preserve the existing whole-passage placeholder safeguard.
+            if _incomplete(item.text):
+                symbolic = VerificationResult(VerificationOutcome.INCONCLUSIVE,
+                    diagnostic="Unresolved placeholder or missing information")
             result = symbolic
-            applicability = "APPLICABLE" if symbolic.outcome in {VerificationOutcome.SUPPORTED, VerificationOutcome.CONTRADICTED} else evidence_applicability(fact, item.text)
+            applicability = "APPLICABLE" if symbolic.outcome in {VerificationOutcome.SUPPORTED, VerificationOutcome.CONTRADICTED} else evidence_applicability(fact, view.comparison_text)
             raw_label = None
             incomplete = _incomplete(fact.text) or _incomplete(item.text)
             if symbolic.outcome is VerificationOutcome.INCONCLUSIVE and self.nli is not None and not incomplete:
                 try:
-                    label = self.nli.classify(item.text, fact.text).lower()
+                    label = self.nli.classify(view.text, fact.text).lower()
                     raw_label = label
                     outcome = (
                         VerificationOutcome.SUPPORTED if label in {"entailment", "entails", "supported"}
@@ -279,6 +278,7 @@ class FactVerifier:
                         getattr(err, "model_name", getattr(self.nli, "model_name", None)))
             results.append((evidence_id, result))
             assessments.append({"chunk_id": evidence_id, "applicability": "INCOMPLETE" if incomplete else applicability,
+                "source_quote": view.text, "start_offset": view.start_offset, "end_offset": view.end_offset,
                 "raw_nli_label": raw_label, "outcome": result.outcome.value,
                 "reason": "Unresolved placeholder/missing information" if incomplete else
                     "Matching explicit obligation signature" if applicability == "APPLICABLE" else

@@ -92,6 +92,110 @@ def test_actual_local_mini_library():
     assert source.read_bytes() == before
 
 
+def test_mini_grounding_with_offline_models_and_sealed_source(mini_source, tmp_path, monkeypatch):
+    """Reproduce the label failure through real ingestion/retrieval, without models."""
+    import re
+    import socket
+    from collections import Counter
+    from c1_requirement_quality import cli
+    from c1_requirement_quality.rag.rag_grounding_analyser import RAGGroundingAnalyser
+    from c1_requirement_quality.rag.retriever import SentenceTransformersEmbedder
+    from c1_requirement_quality.rag.verifier import FactVerifier, LocalNLI
+    from c1_requirement_quality.source_integrity import verify_source
+    from c1_requirement_quality.ml import ml_diagnostics
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Network and real model loading forbidden in this test")
+
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    monkeypatch.setattr(SentenceTransformersEmbedder, "_load_model", forbidden)
+    monkeypatch.setattr(LocalNLI, "_load", forbidden)
+    monkeypatch.setattr(ml_diagnostics, "available_memory_bytes", lambda: 4 * 1024 ** 3)
+
+    class NeutralNLI:
+        def classify(self, premise, hypothesis):
+            return "neutral"
+
+    class OfflineRAG(RAGGroundingAnalyser):
+        def __init__(self, text, **kwargs):
+            vocabulary = sorted(set(re.findall(r"[a-z]+|\d+", text.lower())))
+
+            class Embedder:
+                def encode(self, texts):
+                    counts = [Counter(re.findall(r"[a-z]+|\d+", t.lower())) for t in texts]
+                    return [[float(count[word]) for word in vocabulary] for count in counts]
+
+            super().__init__(text, embedder=Embedder(), verifier=FactVerifier(NeutralNLI()), use_spacy=False)
+
+        def model_provenance(self):
+            return {"test_double": True, "local_files_only": True}
+
+    monkeypatch.setattr(cli, "RAGGroundingAnalyser", OfflineRAG)
+    before = mini_source.read_bytes()
+    normalized = []
+    for mode in ("lexical", "rag"):
+        out = tmp_path / mode
+        cli.run(mini_source, out, "RUN-20261020-120000-ab12", registry_path=tmp_path / f"{mode}-registry.json",
+                grounding_mode=mode, mandatory_rag=mode == "rag")
+        root = out / "c1"
+        artifact_path = root / "validated_requirements.json"
+        data = json.loads(artifact_path.read_text(encoding="utf-8"))
+        cli._validate_contract_artifact(data)
+        text, manifest = verify_source(artifact_path, mini_source)
+        assert manifest["sha256"] == hashlib.sha256(before).hexdigest()
+        assert (root / "internal/source/source.docx").read_bytes() == before
+        normalized.append((root / "internal/normalized_ingestion.json").read_bytes())
+        assert all(not r["bdd_ready"] and r["human_decision"] == "pending" for r in data["requirements"])
+        # The placeholder must remain unresolved in RAG; the two loan policies
+        # remain outside deterministic consistency coverage in this stage.
+        for row in data["requirements"][:12]:
+            if mode == "rag" and row["requirement_id"] == "REQ-EX-004":
+                assert row["grounding"]["status"] == "unsupported"
+                continue
+            assert row["grounding"]["status"] == "supported"
+            assert any("LIB-" in e["text"] and e["text"] in text for e in row["grounding"]["evidence"])
+        assert all(r["consistency"]["status"] == "potential_conflict" for r in data["requirements"])
+        if mode == "rag":
+            diagnostics = json.loads((root / "rag_diagnostics.json").read_text(encoding="utf-8"))
+            assert all(not row["errors"] for row in diagnostics)
+            assert json.loads((root / "internal/rag_provenance.json").read_text())["models"]["test_double"] is True
+    assert normalized[0] == normalized[1]
+    assert mini_source.read_bytes() == before
+
+
+@pytest.mark.parametrize("layout", ["table", "continuation"])
+def test_labelled_docx_layout_grounding_retains_source_blocks(tmp_path, layout):
+    from c1_requirement_quality.analysis.grounding_analyser import analyse_grounding
+    from c1_requirement_quality.rag.fact_extractor import extract_facts
+    from c1_requirement_quality.rag.indexer import SRSIndexer
+    from c1_requirement_quality.rag.verifier import FactVerifier, VerificationOutcome
+
+    claim = "The system shall retain logs for at least 3 days."
+    doc = docx.Document()
+    doc.add_heading("Requirements", 1)
+    if layout == "table":
+        cells = doc.add_table(rows=2, cols=2)
+        cells.cell(0, 0).text, cells.cell(0, 1).text = "ID", "Statement"
+        cells.cell(1, 0).text, cells.cell(1, 1).text = "LIB-001", claim
+    else:
+        doc.add_paragraph("LIB-001 The system shall retain logs")
+        doc.add_paragraph("for at least 3 days.")
+    path = save(doc, tmp_path)
+    before = path.read_bytes()
+    nir = load_docx_srs(path)
+    assert nir.requirements[0].raw_text == claim
+    assert nir.requirements[0].doc_item_number == "LIB-001"
+    assert analyse_grounding(claim, nir.raw_text, source_format="docx")["status"] == "supported"
+    chunks = SRSIndexer(nir.raw_text).chunk_document()
+    snapshots = [c.to_dict() for c in chunks]
+    result = FactVerifier().verify(extract_facts(claim, use_spacy=False)[0], chunks)
+    assert result.outcome == VerificationOutcome.SUPPORTED
+    assert [c.to_dict() for c in chunks] == snapshots
+    assert path.read_bytes() == before
+    if layout == "continuation":
+        assert [b["text"] for b in nir.source_blocks][-2:] == ["LIB-001 The system shall retain logs", "for at least 3 days."]
+
+
 @pytest.mark.parametrize("layout", ["paragraph", "table"])
 @pytest.mark.parametrize("prefix", ["C", "POLICY", "REQ"])
 def test_candidate_meaning_is_independent_of_id_prefix(tmp_path, layout, prefix):

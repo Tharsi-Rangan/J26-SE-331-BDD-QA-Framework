@@ -174,6 +174,26 @@ def test_changed_model_provenance(context):
     assert all(i.released for i in context[4]["instances"])
 
 
+def test_prior_label_policy_receipt_requires_revalidation_without_rewriting(context, monkeypatch):
+    from c1_requirement_quality.rag import candidate_validation as service
+    current = service.verification_policy
+
+    def previous_policy():
+        policy = current()
+        policy["configuration"]["symbolic"] = "obligation-and-numeric-interval-labels-v2"
+        policy["configuration"]["applicability"] = "explicit-obligation-signature-labels-v2"
+        policy["sha256"] = service.sha256(service._canonical(policy["configuration"]))
+        return policy
+
+    monkeypatch.setattr(service, "verification_policy", previous_policy)
+    receipt = publish(context)
+    original = context[3].read_bytes()
+    monkeypatch.setattr(service, "verification_policy", current)
+    with pytest.raises(ValueError, match="binding mismatch"):
+        load(context, receipt)
+    assert context[3].read_bytes() == original
+
+
 @pytest.mark.parametrize("failure", ["provenance_error", "changed_models"])
 def test_preflight_or_midrun_model_change_never_publishes(context, failure):
     context[4][failure] = True
