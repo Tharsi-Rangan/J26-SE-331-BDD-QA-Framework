@@ -107,6 +107,8 @@ def materialize(operation, source, *, analyser_factory=None):
         row.update(final_text=row["original_text"], bdd_ready=False, human_decision="pending",
             selected_candidate_id=record["selected_candidate_id"],
             candidates=[{"candidate_id": cid, "text": item["text"]} for cid, item in record["candidates"].items()])
+        if any(e["review_version"] == 2 for e in intents) and record["questions"]:
+            row["clarification_questions"] = [q["text"] for q in record["questions"].values()]
         row["validation"] = copy.deepcopy(row["validation"] or {"status": "needs_review", "checks": {}})
         row["validation"]["status"] = "needs_review"
         selected = record["candidates"].get(record["selected_candidate_id"])
@@ -115,7 +117,8 @@ def materialize(operation, source, *, analyser_factory=None):
         if rid in by_id:
             intent = by_id[rid]
             row["final_text"] = selected["text"]
-            checked = session._review_evaluation(rid, session._review_state or parent)
+            checked = session._review_evaluation(rid, session._review_state or parent,
+                                                review_version=intent["review_version"])
             if checked != intent["eligibility"]:
                 raise ValueError("Approval eligibility changed before publication")
             row.update(human_decision="approved", defects=checked["evaluation"]["quality_findings"],

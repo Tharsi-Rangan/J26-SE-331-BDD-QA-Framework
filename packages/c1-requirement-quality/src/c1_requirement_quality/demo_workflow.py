@@ -162,9 +162,15 @@ class DemoSession:
                 stage_progress("review", "running", "Verifying session and saved predictions")
         return cls(workspace)
 
-    def __init__(self, workspace: Path, *, _registry_anchor=None, analyser_factory=None):
+    def __init__(self, workspace: Path, *, _registry_anchor=None, analyser_factory=None,
+                 _evidence_only=False):
         self.workspace = workspace.resolve()
         self._registry_anchor = _registry_anchor
+        # Evidence reconstruction cannot supply approvals or publish operations.
+        # It replays the same source-bound review actions at an exact journal
+        # prefix, avoiding recursive approval evaluation when checking answers.
+        if _evidence_only and _registry_anchor is None:
+            raise ValueError("Evidence reconstruction requires an exact journal prefix")
         from c1_requirement_quality.rag.publication import _factory
         self._analyser_factory = analyser_factory or _factory.get()
         if _registry_anchor is not None:
@@ -242,7 +248,8 @@ class DemoSession:
             elif event["kind"] in {"refinement_review", "approval_intent"}:
                 if self.pending is not None:
                     raise ValueError("Review cannot overlap a pending publication")
-                self._replay_refinement_review(event)
+                if not (_evidence_only and event["kind"] == "approval_intent"):
+                    self._replay_refinement_review(event)
             elif event["kind"] != "review":
                 raise ValueError("Unknown demo journal event")
             self.events.append(event)
@@ -275,7 +282,7 @@ class DemoSession:
                 "draft_sha256": _hash(_canonical(state)),
                 "verification_policy": verification_policy()}
 
-    def _review_evaluation(self, rid, state):
+    def _review_evaluation(self, rid, state, *, review_version=2):
         """Recheck receipt against sealed P; draft answers never become SRS evidence."""
         from c1_requirement_quality.workflow_persistence import (
             _candidate_snapshot_identity, _read_candidate_reference, candidate_evidence_path,
@@ -306,8 +313,11 @@ class DemoSession:
         context = CandidateGroundingContext(self.current, self.source,
             {cid: (candidate_evidence_path(self.workspace, reference["evidence"]), reference["receipt_sha256"])},
             reference["top_k"], self._analyser_factory or RAGGroundingAnalyser)
+        if review_version == 2:
+            context = self._with_review_evidence(context)
         evaluation = _evaluate_candidate(candidate["text"], text, row["original_text"],
-            parent["requirements"][rid], grounding_context=context, requirement_id=rid,
+            state["requirements"][rid] if review_version == 2 else parent["requirements"][rid],
+            grounding_context=context, requirement_id=rid,
             workflow_context=VerifiedWorkflowContext(self.current, self.source))
         if (evaluation["grounding"].get("validation_binding") != reference["binding"]
                 or evaluation["grounding"].get("models") != reference["models"]):
@@ -318,6 +328,10 @@ class DemoSession:
             selected = draft["candidates"].get(draft["selected_candidate_id"])
             if selected is not None:
                 peer["final_text"] = selected["text"]
+        if review_version == 2:
+            # A rejected proposal never replaces the peer's published/original
+            # obligation. Keep historical version-1 replay semantics intact.
+            peers = self._review_peers(state)
         consistency = _consistency_with_candidate(rid, candidate["text"], peers,
             state["requirements"], context_from_state(state))
         unresolved = clarification_resolution(record, row["original_text"], [])["unresolved_questions"]
@@ -338,7 +352,7 @@ class DemoSession:
         _, _, manifest, parent = self.read()
         if not manifest.get("rag_policy"):
             raise ValueError("Initial-RAG review requires verified RAG provenance")
-        if type(event.get("review_version")) is not int or event["review_version"] != 1:
+        if type(event.get("review_version")) is not int or event["review_version"] not in {1, 2}:
             raise ValueError("Unsupported refinement review version")
         state = copy.deepcopy(self._review_state or parent)
         if event.get("basis") != self._review_basis(state):
@@ -349,6 +363,8 @@ class DemoSession:
         action = event["action"]
         allowed = {"requirement_id", "selected_candidate_text", "selected_candidate_id", "candidate_texts",
                    "clarification_questions", "clarification_answers", "question_actions", "workflow_action", "human_decision"}
+        if event["review_version"] == 2:
+            allowed |= {"consistency_review", "resolution", "reason"}
         if not isinstance(action, dict) or set(action) - allowed:
             raise ValueError("Unsupported initial-RAG review action")
         rid = action.get("requirement_id")
@@ -357,22 +373,20 @@ class DemoSession:
         record = state["requirements"][rid]
         decision = action.get("human_decision")
         work = action.get("workflow_action")
-        if decision not in {None, "approved", "rejected"} or work not in {None, "request_clarification", "reopen"}:
+        work_values = {None, "request_clarification", "reopen"}
+        if event["review_version"] == 2:
+            work_values |= {"escalate", "resolve_escalation"}
+        if decision not in {None, "approved", "rejected"} or work not in work_values:
             raise ValueError("Initial-RAG approval/publication integration is pending; unsupported action")
         if event["kind"] == "approval_intent":
             if set(action) != {"requirement_id", "human_decision", "selected_candidate_id"}:
                 raise ValueError("Approval intent requires a separate exact selection decision")
             if decision != "approved" or action["selected_candidate_id"] != record["selected_candidate_id"]:
                 raise ValueError("Approval intent selection mismatch")
-            checked = self._review_evaluation(rid, state)
+            checked = self._review_evaluation(rid, state, review_version=event["review_version"])
             if checked != event.get("eligibility"):
                 raise ValueError("Approval intent eligibility mismatch")
-            if (not checked["evaluation"]["candidate_eligible"]
-                    or any(v != "pass" for k, v in checked["validation"]["checks"].items() if k != "consistency")
-                    or (checked["consistency"]["check"] != "pass"
-                        and not is_single_requirement_no_peers(checked["consistency"]))
-                    or record["clarification_requested"] or record["escalation_active"]
-                    or checked["tier"]["tier"] != "TIER_1_AUTO_REFINE"):
+            if not self._approval_is_eligible(checked, record):
                 raise ValueError("Candidate is not eligible for approval intent")
             if any(i["basis"] == event["basis"] and i["action"] == action for i in self._approval_intents):
                 raise ValueError("Repeated approval intent")
@@ -382,6 +396,25 @@ class DemoSession:
             return
         if decision == "approved":
             raise ValueError("Approval requires independently verified approval intent")
+        if "consistency_review" in action:
+            if set(action) != {"requirement_id", "consistency_review"}:
+                raise ValueError("Record consistency separately from edits and decisions")
+            from c1_requirement_quality.effective_consistency import views, context_from_state, create_review
+            request = copy.deepcopy(action["consistency_review"])
+            ids = request.pop("requirement_ids", None)
+            if (not isinstance(ids, list) or len(ids) != 2 or len(set(ids)) != 2
+                    or rid != ids[0] or request.get("reviewer") != actor):
+                raise ValueError("Consistency review requirement/reviewer binding mismatch")
+            data = self._review_peers(state)
+            pairs = [v for v in views(data, state["requirements"], context_from_state(state))
+                     if v["requirement_ids"] == sorted(ids)]
+            if len(pairs) != 1:
+                raise ValueError("Unknown consistency pair")
+            review = create_review(pairs[0], request)
+            from c1_requirement_quality.consistency_review import digest
+            review["recorded_at"] = event["recorded_at"]
+            review["review_id"] = "REVIEW-" + digest({k: v for k, v in review.items() if k != "review_id"})
+            _event(state, rid, "consistency_review_adopted", actor, review)
         texts = action.get("candidate_texts", [])
         if not isinstance(texts, list) or len(texts) > 3:
             raise ValueError("At most three supplied candidates per action")
@@ -435,6 +468,22 @@ class DemoSession:
             if selected is None:
                 raise ValueError("Select a candidate to reject")
             record["candidates"][selected]["status"] = "REJECTED"
+        if work == "escalate":
+            record["escalation_active"] = True
+        if work == "resolve_escalation":
+            resolution = action.get("resolution")
+            if not isinstance(resolution, str) or not resolution.strip():
+                raise ValueError("Explicit escalation resolution is required")
+            if not record["escalation_active"]:
+                raise ValueError("No active escalation to resolve")
+            checked = self._review_evaluation(rid, state)
+            if (not checked["evaluation"]["candidate_eligible"]
+                    or checked["evaluation"]["quality_check"] != "pass"
+                    or checked["consistency"]["status"] == "conflict"
+                    or clarification_resolution(record, next(r["original_text"] for r in
+                        self.read()[0]["requirements"] if r["requirement_id"] == rid), [])["unresolved_questions"]):
+                raise ValueError("Escalation remains unresolved under independent validation")
+            record["escalation_active"] = False
         _event(state, rid, "refinement_review", actor, action)
         # Replace generated audit IDs with journal-derived identities before hashing.
         replacements = {}
@@ -453,6 +502,21 @@ class DemoSession:
             return replacements.get(value, value) if isinstance(value, str) else value
         state = stable(state)
         self._review_state = state
+
+    @staticmethod
+    def _approval_is_eligible(checked, record):
+        from c1_requirement_quality.bdd_readiness import is_single_requirement_no_peers
+        return (checked["evaluation"]["candidate_eligible"]
+            and all(v == "pass" for k, v in checked["validation"]["checks"].items() if k != "consistency")
+            and (checked["consistency"]["check"] == "pass" or is_single_requirement_no_peers(checked["consistency"]))
+            and not record["clarification_requested"] and not record["escalation_active"]
+            and checked["tier"]["tier"] == "TIER_1_AUTO_REFINE")
+
+    def approval_assessment(self, requirement_id):
+        """Display the exact existing approval gate without recording a decision."""
+        state = self.review_read()[3]
+        checked = self._review_evaluation(requirement_id, state)
+        return {**checked, "approval_eligible": self._approval_is_eligible(checked, state["requirements"][requirement_id])}
 
     def review_action(self, action, reviewer, confirmed):
         """Record a draft or approval intent; never call refinement publication."""
@@ -474,7 +538,7 @@ class DemoSession:
         if kind == "approval_intent":
             rid = action["requirement_id"]
             action.setdefault("selected_candidate_id", state["requirements"][rid]["selected_candidate_id"])
-        values = {"review_version": 1, "action": action, "reviewer": reviewer.strip(), "basis": current._review_basis(state),
+        values = {"review_version": 2, "action": action, "reviewer": reviewer.strip(), "basis": current._review_basis(state),
                   "recorded_at": datetime.now(timezone.utc).isoformat()}
         if kind == "approval_intent":
             values.update(eligibility=current._review_evaluation(action["requirement_id"], state),
@@ -514,8 +578,11 @@ class DemoSession:
             existing = {q["text"] for q in state["requirements"][rid]["questions"].values()}
             questions = list(dict.fromkeys(q for q in questions if q not in existing))
             if questions:
-                self.review_action({"requirement_id": rid, "clarification_questions": questions},
-                                   "system:quality-rules", True)
+                action = {"requirement_id": rid, "clarification_questions": questions}
+                if self.read()[2].get("rag_policy"):
+                    self.review_action(action, "system:quality-rules", True)
+                else:
+                    self.apply(action, "system:quality-rules", True)
                 generated.append({"requirement_id": rid, "questions": questions,
                                   "source": "deterministic_quality_rules", "answers": []})
         return generated
@@ -527,15 +594,19 @@ class DemoSession:
         data, text, manifest, state = self.read()
         if not manifest.get("rag_policy"):
             raise ValueError("Initial-RAG review generation requires verified provenance")
-        context = self.candidate_grounding_context()
+        context = self.review_grounding_context()
         session = self
         generator = backend or DeterministicSubstitutionBackend(structural_only_alternative=True)
+        if getattr(generator, "generation_kind", None) == "api_llm":
+            from c1_requirement_quality.source_integrity import require_cloud_shareable
+            require_cloud_shareable(manifest)
         class RegisteredBackend:
             generation_kind = getattr(generator, "generation_kind", None)
             def __init__(self):
                 self.index = 0
             def generate(self, *args, **kwargs):
-                proposals = generator.generate(*args, **kwargs)[:3]
+                generate = getattr(generator, "generate_multiple", generator.generate)
+                proposals = generate(*args, **kwargs)[:3]
                 rid = generation_ids[self.index]
                 self.index += 1
                 for proposal in proposals:
@@ -543,6 +614,9 @@ class DemoSession:
                     if cid not in context.receipts:
                         session.validate_candidate_evidence(rid, proposal["text"])
                         context.receipts.update(session.candidate_grounding_context().receipts)
+                # New receipt journal entries change the prefix, but never the
+                # human facts. Refresh the evidence anchor after registration.
+                context.anchor = session._review_anchor()
                 return proposals
         draft = self.review_read()[3]
         from c1_requirement_quality.workflow_persistence import current_answer_actions
@@ -563,18 +637,47 @@ class DemoSession:
                           and check_eligibility(row, next(a["clarification_answers"] for a in answers
                                                         if a["requirement_id"] == row["requirement_id"]))[0]]
         result = generate_candidate_suggestions(data, text, backend=RegisteredBackend(),
-            clarification_answers=answers, workflow_records=state["requirements"],
-            consistency_context=context_from_state(state), requirement_ids=requirement_ids,
+            clarification_answers=answers, workflow_records=draft["requirements"],
+            consistency_context=context_from_state(draft), requirement_ids=requirement_ids,
             workflow_blocked_ids=blocked,
             workflow_rejected_ids={cid for record in draft["requirements"].values()
                                    for cid, c in record["candidates"].items() if c["status"] == "REJECTED"},
             grounding_context=context, workflow_context=VerifiedWorkflowContext(self.current, self.source))
+        result.update(input_sha256=manifest["artifact_sha256"], source_sha256=manifest["sha256"],
+                      workflow_sha256=manifest["workflow_sha256"],
+                      review_basis_sha256=_hash(json.dumps(draft, sort_keys=True).encode()))
         for item in result["requirements"]:
             texts = [c["text"] for c in item["ranked_candidates"][:3]]
             if texts:
                 self.review_action({"requirement_id": item["requirement_id"], "candidate_texts": texts},
-                                   "system:deterministic-generator", True)
+                                   "system:" + str(getattr(generator, "generation_kind", "deterministic-generator")), True)
+        _write(self.workspace / "sidecars" / ("review-generation-" + uuid.uuid4().hex + ".json"), result)
         return result
+
+    def propose_review_clarifications(self, requirement_id, *, backend):
+        """Existing proposal validator and journal; acceptance remains explicit."""
+        from c1_requirement_quality.source_integrity import VerifiedWorkflowContext
+        data, text, manifest, _ = self.read()
+        from c1_requirement_quality.source_integrity import require_cloud_shareable
+        require_cloud_shareable(manifest)
+        state = self.review_read()[3]
+        basis = self._review_basis(state)
+        row = next((r for r in data["requirements"] if r["requirement_id"] == requirement_id), None)
+        if row is None:
+            raise ValueError("Unknown clarification requirement")
+        context = _context(row, text, state, {}, 6000)
+        response = backend.propose_clarification(context)
+        grounding = self.review_grounding_context() if self.read()[2].get("rag_policy") else None
+        validated = validate_proposal(response["proposal"], context, text, data["requirements"],
+            state["requirements"][requirement_id], "docx" if self.source.suffix.lower() == ".docx" else None,
+            workflow_context=VerifiedWorkflowContext(self.current, self.source), grounding_context=grounding)
+        fresh = DemoSession(self.workspace, analyser_factory=self._analyser_factory)
+        if fresh._review_basis(fresh.review_read()[3]) != basis:
+            raise ValueError("Review basis changed during clarification generation")
+        _write(self.workspace / "sidecars" / ("review-clarifications-" + uuid.uuid4().hex + ".json"),
+               {"untrusted_proposal": validated, "sent_context": context,
+                "review_basis": basis, "model": response["model"], "usage": response["usage"]})
+        return validated
 
     def initial_ml_predictions(self):
         """Validate saved initial-text scores; never replay inference on resume."""
@@ -895,9 +998,40 @@ class DemoSession:
         return restore_candidate_receipts(self.workspace,
             VerifiedWorkflowContext(self.current, self.source), analyser_factory=analyser_factory or self._analyser_factory)
 
+    def _journal_anchor(self):
+        return {"sequence": len(self.events), "sha256": self.events[-1]["sha256"] if self.events else None}
+
+    def _review_anchor(self):
+        # Approval and evidence-registration events do not change human facts.
+        # Retain the state-producing prefix so historical approval verification
+        # is stable after later approvals/publication events are appended.
+        event = next((e for e in reversed(self.events) if e["kind"] in {"refinement_review", "completed"}), None)
+        return {"sequence": event["sequence"], "sha256": event["sha256"]} if event else {"sequence": 0, "sha256": None}
+
+    def _with_review_evidence(self, context):
+        from c1_requirement_quality.rag.review_evidence import ReviewedGroundingContext
+        return ReviewedGroundingContext(context, self.workspace, self._review_anchor())
+
+    def review_grounding_context(self):
+        return self._with_review_evidence(self.candidate_grounding_context())
+
+    def _review_peers(self, state=None):
+        state = state or self.review_read()[3]
+        rows = copy.deepcopy(self.read()[0]["requirements"])
+        for row in rows:
+            record = state["requirements"][row["requirement_id"]]
+            selected = record["candidates"].get(record["selected_candidate_id"])
+            if selected is not None and selected["status"] != "REJECTED":
+                row["final_text"] = selected["text"]
+        return rows
+
     def consistency_pairs(self, *, gate_policy: bool = False):
         from c1_requirement_quality.consistency_review import pair_views
         data, _, manifest, state = self.read()
+        if gate_policy and manifest.get("rag_policy"):
+            from c1_requirement_quality.effective_consistency import context_from_state, views
+            state = self.review_read()[3]
+            return views(self._review_peers(state), state["requirements"], context_from_state(state))
         history = []
         # Reconstruct sticky invalidation from immutable, verified snapshots.
         # Reverting wording cannot silently resurrect an older human review.
@@ -927,6 +1061,10 @@ class DemoSession:
 
     def adopt_consistency(self, requirement_ids: list[str], **review: Any) -> None:
         reviewer = review.get("reviewer")
+        if self.read()[2].get("rag_policy"):
+            self.review_action({"requirement_id": requirement_ids[0], "consistency_review":
+                {"requirement_ids": requirement_ids, **review}}, reviewer, review.get("confirmed") is True)
+            return
         self.apply([], reviewer, review.get("confirmed") is True,
                    consistency_reviews=[{"requirement_ids": requirement_ids, **review}])
 

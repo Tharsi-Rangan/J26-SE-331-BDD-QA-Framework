@@ -32,8 +32,11 @@ def resolve_workflow_policy(context, *, artifact=None, source_text=None):
     if artifact is not None and artifact != current:
         raise ValueError("Workflow provenance or parent artifact mismatch")
     rag = "rag_policy" in manifest
-    if not rag and any((context.input_path.parent / name).exists() for name in
-                       ("rag_diagnostics.json", "internal/rag_provenance.json")):
+    # Optional run diagnostics are advisory, not a declaration of mandatory RAG.
+    # Dedicated provenance and ancestry markers must still fail closed without
+    # their policy; _verify_snapshot has already checked the complete chain.
+    if not rag and ((context.input_path.parent / "internal/rag_provenance.json").exists()
+                    or any(key in manifest for key in ("rag_provenance_sha256", "rag_diagnostics_sha256", "rag_ancestry_version"))):
         raise ValueError("RAG provenance exists without its mandatory manifest policy")
     if context.source_scope is not None:
         if rag or any(line.strip() not in text for line in context.source_scope.splitlines() if line.strip()):
@@ -46,6 +49,13 @@ def resolve_workflow_policy(context, *, artifact=None, source_text=None):
 
 def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def require_cloud_shareable(manifest: dict[str, Any]) -> None:
+    """Enforce the user's local-only CampusCare restriction before any request."""
+    if ("campuscare" in str(manifest.get("original_filename", "")).casefold()
+            or manifest.get("sha256") == "203c2b8fd18db7e31beda432f3a6f7fb3aa99e8215579c39b5055023b7045805"):
+        raise ValueError("CampusCare is local-only; use offline questions or manual review. No external request permitted.")
 
 
 def document_identity(source: Path, explicit: str | None = None) -> str:

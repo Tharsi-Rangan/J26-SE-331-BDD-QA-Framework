@@ -39,6 +39,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="c1")
     sub = parser.add_subparsers(dest="command")
 
+    tui_parser = sub.add_parser("tui", help="selectable terminal wizard over the existing verified workflow")
+    tui_parser.add_argument("--root", help="session discovery directory")
+    tui_parser.add_argument("--session", help="resume an existing verified session")
     demo_parser = sub.add_parser("demo", help="guided resumable review; saved sidecars, no model/API execution")
     mode = demo_parser.add_mutually_exclusive_group()
     mode.add_argument("--workspace", help="fresh session directory")
@@ -673,6 +676,10 @@ def run(srs: Path, out: Path, run_id: str, project_code: str = "EX",
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.command == "tui":
+            from c1_requirement_quality.tui import launch
+            from c1_requirement_quality.demo_workflow import DemoSession
+            return launch(root=args.root, session=DemoSession(Path(args.session)) if args.session else None)
         if args.command is None or (args.command == "demo" and not args.workspace and not args.resume):
             if args.command == "demo" and any((args.input_path, args.srs, args.run_id, args.registry, args.document_id)):
                 raise ValueError("Advanced demo inputs require --workspace or --resume")

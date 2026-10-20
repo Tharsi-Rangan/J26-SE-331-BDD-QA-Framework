@@ -1,5 +1,10 @@
 # Stage 4E: beginner terminal wizard
 
+**Current interface:** interactive `c1` now opens the selectable Textual wizard
+when the optional `tui` dependency is installed. See [the current guide](selectable-cli.md).
+The numbered interface remains the redirected-input/compatibility path. This
+file retains earlier milestone descriptions and their original validation records.
+
 ## M2: controlled publication and Refined SRS export
 
 The guided wizard now continues from an active M1 approval intent to an explicit

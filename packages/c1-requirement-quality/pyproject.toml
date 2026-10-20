@@ -19,6 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+tui = ["textual>=8.2.8,<9"]
 rag = [
   "sentence-transformers>=3.0",
   "spacy>=3.7",
@@ -34,7 +35,7 @@ c1 = "c1_requirement_quality.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-c1_requirement_quality = ["sample_srs.md"]
+c1_requirement_quality = ["sample_srs.md", "tui.tcss"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

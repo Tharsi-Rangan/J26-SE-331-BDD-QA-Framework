@@ -108,11 +108,22 @@ def grounded_current(text: str, srs_text: str, original: str | None = None,
         return {"authority": "rag", "status": "unsupported", "verdict": "ERROR",
                 "evidence": [], "diagnostics": [], "errors": ["Mandatory candidate RAG context missing"],
                 "eligible_for_acceptance": False, "completion_status": "incomplete"}
+    return clarification_grounding(text, srs_text, original, record, source_format=source_format)
+
+
+def clarification_grounding(text: str, srs_text: str, original: str | None,
+                           record: dict[str, Any] | None, *, source_format=None,
+                           require_human: bool = False) -> dict[str, Any]:
+    """Existing 1B.3 exact evidence rules, without granting workflow authority.
+
+    Callers must independently authenticate source and answer provenance. This
+    helper neither authorizes a RAG downgrade nor creates an approval.
+    """
     source = analyse_grounding(text, srs_text, source_format=source_format)
     result = copy.deepcopy(source)
     result.update(srs_evidence=copy.deepcopy(source["evidence"]), human_clarification_evidence=[],
                   original_srs_status=source["status"])
-    if source["status"] == "supported" or original is None or record is None or source.get("conflicts"):
+    if (source["status"] == "supported" and not require_human) or original is None or record is None or source.get("conflicts"):
         return result
     resolution = clarification_resolution(record, original, [])
     active = resolution["active_answers"]

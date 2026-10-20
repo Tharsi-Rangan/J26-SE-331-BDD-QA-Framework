@@ -9,10 +9,14 @@ from pathlib import Path
 from c1_requirement_quality.source_integrity import sha256
 
 
-def export_refined_srs(session, out: Path):
+def export_refined_srs(session, out: Path, *, include_handoff: bool = False, formats=None):
     """Create a fresh DOCX/report bundle. Unpublished drafts remain original text."""
     from docx import Document
     from c1_requirement_quality.demo_workflow import DemoSession
+    enabled = set(formats) if formats is not None else ({"docx", "quality", "json", "decisions", "traceability"}
+        if include_handoff else {"docx", "quality"})
+    if not enabled or enabled - {"docx", "quality", "json", "decisions", "traceability"}:
+        raise ValueError("Select supported nonempty export formats")
     session = DemoSession(session.workspace, analyser_factory=getattr(session, "_analyser_factory", None))
     if out.exists():
         raise FileExistsError("Export folder already exists; choose a new folder")
@@ -137,16 +141,52 @@ def export_refined_srs(session, out: Path):
             "Consistency: " + json.dumps(row["consistency"], ensure_ascii=False),
             "Quality issues: " + json.dumps(row["defects"], ensure_ascii=False),
             "Clarifications: " + json.dumps(row["clarifications"], ensure_ascii=False), ""])
-    document.save(stage / "refined_srs.docx")
-    (stage / "quality_report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False) + "\n", encoding="utf-8")
-    (stage / "quality_report.md").write_text("\n".join(lines), encoding="utf-8")
+    names = []
+    if "docx" in enabled:
+        document.save(stage / "refined_srs.docx")
+        names.append("refined_srs.docx")
+    if "quality" in enabled:
+        (stage / "quality_report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False) + "\n", encoding="utf-8")
+        (stage / "quality_report.md").write_text("\n".join(lines), encoding="utf-8")
+        names.extend(["quality_report.json", "quality_report.md"])
+    if enabled & {"json", "decisions", "traceability"}:
+        # Copy the authenticated contract bytes, not the display-only draft.
+        # C2 consumes bdd_ready rows; blocked rows stay present and non-ready.
+        raw = session.current.read_bytes()
+        if sha256(raw) != manifest["artifact_sha256"]:
+            raise ValueError("Handoff artifact changed during export")
+        from c1_requirement_quality.contract import validate_contract_artifact
+        validate_contract_artifact(json.loads(raw))
+        if "json" in enabled:
+            target = stage / "c1/validated_requirements.json"
+            target.parent.mkdir()
+            target.write_bytes(raw)
+            source_target = stage / "c1/internal/source" / manifest["original_filename"]
+            source_target.parent.mkdir(parents=True)
+            original_bytes = session.source.read_bytes()
+            if sha256(original_bytes) != manifest["sha256"]:
+                raise ValueError("Handoff source changed during export")
+            source_target.write_bytes(original_bytes)
+            names.append("c1/validated_requirements.json")
+        decisions = {"artifact": report["artifact"], "scope": report["scope"],
+            "requirements": [{k: r[k] for k in ("requirement_id", "status", "human_decision",
+                "clarifications", "approval_intent_sha256s", "candidate_review")} for r in rows]}
+        traceability = {"source": report["source"], "artifact": report["artifact"],
+            "notice": "C2 handoff copy. Resume and provenance verification use the originating session and run family.",
+            "requirements": [{k: r[k] for k in ("requirement_id", "source_document_item", "source_location",
+                "original_text", "final_text", "status", "bdd_ready")} for r in rows]}
+        for name, value in (("decision_report.json", decisions), ("traceability_report.json", traceability)):
+            if ("decisions" if name == "decision_report.json" else "traceability") not in enabled:
+                continue
+            (stage / name).write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            names.append(name)
     latest, _, current_manifest, current_state = session.read()
     if latest != data or current_manifest != manifest or current_state != state or session.review_read()[3] != draft:
         raise ValueError("Snapshot or review changed during export; staged files retained")
     if out.exists():
         raise FileExistsError(out)
     stage.rename(out)
-    return {name: out / name for name in ("refined_srs.docx", "quality_report.json", "quality_report.md")}
+    return {name: out / name for name in names}
 
 
 def copy_candidates(candidates):

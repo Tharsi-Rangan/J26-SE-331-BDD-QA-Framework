@@ -5,6 +5,35 @@
 This package is **Python** (Presidio, NLI, sentence-transformers and ML classifiers are Python tools).
 It talks to C2 only through `c1/validated_requirements.json`, so the language does not affect anyone else.
 
+## Selectable terminal application
+
+The current interactive entry point is the Textual wizard. From the repository
+root, activate the C1 environment and run `c1` in an interactive terminal:
+
+```powershell
+.\packages\c1-requirement-quality\.venv\Scripts\Activate.ps1
+c1
+```
+
+For a new environment, install the optional interface with
+`pip install -e "./packages/c1-requirement-quality[dev,tui]"`.
+Existing local-model dependencies and assets are still required for mandatory
+RAG/ML analysis; the application never downloads them. At least 3 GiB available
+physical RAM remains required by the existing inference services.
+
+Use arrows, Enter, Esc and Tab. Import, preview, analysis, clarification,
+candidate comparison, consistency evidence selection, explicit approval,
+publication, exports and resume use the existing verified `DemoSession` services.
+Cloud generation is optional and requires consent. CampusCare remains local-only.
+The batch commands and redirected-input text menus remain available.
+
+See [the current navigation, setup and methodology guide](docs/selectable-cli.md).
+See [the delivery verification and remaining limits](docs/c1-completion-verification-20261020.md)
+for observed test and acceptance results.
+The phase reports below retain their historical scope and test results;
+statements that an earlier phase had no interactive/model integration are not
+descriptions of the current selectable entry point.
+
 ## Set up (once)
 
 The whole team uses **Python 3.12** (CI too). `pyproject.toml` refuses other versions.

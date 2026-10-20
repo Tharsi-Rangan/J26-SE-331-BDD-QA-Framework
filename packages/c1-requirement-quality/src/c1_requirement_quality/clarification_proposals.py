@@ -218,7 +218,7 @@ def propose_clarifications_run(input_path: Path, source: Path, out: Path, requir
                                max_requests: int = 2, max_evidence_chars: int = 6000,
                                max_context_chars: int = 12000, grounding_context=None) -> None:
     from c1_requirement_quality.contract import validate_contract_artifact as _validate_contract_artifact
-    from c1_requirement_quality.source_integrity import VerifiedWorkflowContext
+    from c1_requirement_quality.source_integrity import VerifiedWorkflowContext, resolve_workflow_policy
     if out.exists():
         raise FileExistsError(f"Proposal output already exists: {out}")
     if (not requirement_ids or len(set(requirement_ids)) != len(requirement_ids)
@@ -230,8 +230,10 @@ def propose_clarifications_run(input_path: Path, source: Path, out: Path, requir
     raw = input_path.read_bytes()
     artifact = json.loads(raw.decode("utf-8-sig"))
     _validate_contract_artifact(artifact)
-    source_text, manifest = verify_source(input_path, source)
-    state, _ = load_state(input_path, source)
+    _, source_text, manifest, state = resolve_workflow_policy(
+        VerifiedWorkflowContext(input_path, source), artifact=artifact)
+    from c1_requirement_quality.source_integrity import require_cloud_shareable
+    require_cloud_shareable(manifest)
     if manifest.get("rag_policy") or grounding_context is not None:
         from c1_requirement_quality.rag.candidate_validation import context_for_snapshot
         grounding_context = context_for_snapshot(input_path, source, grounding_context)

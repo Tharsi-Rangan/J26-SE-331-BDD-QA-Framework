@@ -1,5 +1,11 @@
 # Guided C1 terminal workflow (Stage 4C)
 
+This is the historical command-oriented review reference. The current default
+interactive application is documented in [Selectable CLI](selectable-cli.md).
+Existing argument-based `demo` commands remain available. Later mandatory-RAG
+review integrates the same journal and controlled publication, with versioned
+human clarification support; no legacy audit-only pair record is promoted implicitly.
+
 ## Start and resume
 
 From the repository root, attach to the verified portable Kinmail bundle with a

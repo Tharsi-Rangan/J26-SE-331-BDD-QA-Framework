@@ -1123,26 +1123,39 @@ class Wizard:
 
         model_name = getattr(backend, "model", "qwen/qwen3.8-27b")
         try:
+            if session.read()[2].get("rag_policy"):
+                if hasattr(backend, "verify_availability"):
+                    backend.verify_availability()
+                validated = session.propose_review_clarifications(rid, backend=backend)
+            else:
+                validated = self._legacy_clarification_request(session, target_row, rows, state, backend, model_name)
+        except Exception as err:
+            self.tell(f"Groq clarification request failed: {err}")
+            return
+
+        self._accept_clarification_proposals(session, rid, validated)
+
+    def _legacy_clarification_request(self, session, target_row, rows, state, backend, model_name):
+            from .source_integrity import verify_source, VerifiedWorkflowContext
+            from .clarification_proposals import _context, validate_proposal
+            rid = target_row["requirement_id"]
             source_text, _ = verify_source(session.current, session.source)
             context = _context(target_row, source_text, state, {}, max_evidence_chars=6000)
             self.tell(f"Requesting clarification proposals from Groq ({model_name})...")
             response = backend.propose_clarification(context)
-            validated = validate_proposal(
+            return validate_proposal(
                 response["proposal"], context, source_text,
                 rows, state["requirements"][rid],
                 "docx" if session.source.suffix.lower() == ".docx" else None,
                 workflow_context=VerifiedWorkflowContext(session.current, session.source),
             )
-        except Exception as err:
-            self.tell(f"Groq clarification request failed: {err}")
-            return
-
+    def _accept_clarification_proposals(self, session, rid, validated):
         proposed_questions = validated.get("clarification_questions", [])
         if not proposed_questions:
             self.tell("No clarification questions proposed by the model.")
             return
 
-        record = session.read()[3]["requirements"][rid]
+        record = session.review_read()[3]["requirements"][rid]
         existing_texts = {q["text"].strip().casefold() for q in record["questions"].values()}
 
         self.tell(f"\nReceived {len(proposed_questions)} clarification proposal(s) from Groq:")
@@ -1337,6 +1350,11 @@ class Wizard:
         self.tell(f"Generating candidate rewrites with Groq ({model_name})...")
         try:
             with redirect_stdout(io.StringIO()):
+                if isinstance(session, DemoSession) and session.read()[2].get("rag_policy"):
+                    if hasattr(backend, "verify_availability"):
+                        backend.verify_availability()
+                    result = session.generate_review_candidates([requirement_id] if requirement_id else None, backend=backend)
+                    return [(item["requirement_id"], c) for item in result["requirements"] for c in item["ranked_candidates"]]
                 generate_candidates_run(session.current, session.source, path, backend=backend,
                                         requirement_ids=[requirement_id] if requirement_id else None)
         except Exception as err:
@@ -1384,10 +1402,13 @@ class Wizard:
         if manifest.get("rag_policy") or grounding_context is not None:
             from .rag.candidate_validation import context_for_snapshot
             if manifest.get("rag_policy") and grounding_context is None and isinstance(session, DemoSession):
-                grounding_context = session.candidate_grounding_context()
+                grounding_context = session.review_grounding_context()
             grounding_context = context_for_snapshot(session.current, session.source, grounding_context)
         row = next(r for r in data["requirements"] if r["requirement_id"] == rid)
         record = state["requirements"][rid]
+        from .rag.review_evidence import ReviewedGroundingContext
+        if isinstance(grounding_context, ReviewedGroundingContext):
+            record = session.review_read()[3]["requirements"][rid]
         evaluation = _evaluate_candidate(candidate["text"], text, row["original_text"], record,
             source_format="docx" if session.source.suffix.lower() == ".docx" else None,
             grounding_context=grounding_context, requirement_id=rid, workflow_context=policy_context)
@@ -1397,7 +1418,7 @@ class Wizard:
             for peer in data["requirements"]:
                 draft = state["requirements"][peer["requirement_id"]]
                 selected = draft["candidates"].get(draft["selected_candidate_id"])
-                if selected is not None:
+                if selected is not None and selected["status"] != "REJECTED":
                     peer["final_text"] = selected["text"]
         consistency = _consistency_with_candidate(rid, candidate["text"], data["requirements"],
             state["requirements"], context_from_state(state))
@@ -1649,7 +1670,9 @@ class Wizard:
 
     def consistency(self, session, requirement_id=None, *, prioritised=False):
         pairs = session.consistency_pairs(gate_policy=True)
-        data, _, _, state = session.read()
+        data, _, manifest, state = session.review_read()
+        if manifest.get("rag_policy"):
+            data["requirements"] = session._review_peers(state)
         resolutions = {}
         for row in data["requirements"]:
             result = assess(row["requirement_id"], data["requirements"], state["requirements"], context_from_state(state))
@@ -2126,6 +2149,15 @@ class Wizard:
 
 
 def launch(*, root=None, ask=None, tell=print, classifier=None):
+    if ask is None and tell is print and sys.stdin.isatty() and sys.stdout.isatty():
+        try:
+            from .tui import launch as launch_tui
+        except ModuleNotFoundError as error:
+            if error.name != "textual" and not (error.name or "").startswith("textual."):
+                raise
+            tell('Selectable interface needs the optional dependency: pip install -e "packages/c1-requirement-quality[tui]"')
+        else:
+            return launch_tui(root=root)
     if not sys.stdin.isatty():
         tell("Text-menu mode: enter option numbers on separate lines. End of input pauses safely.")
     return Wizard(Path(root) if root else Path.cwd() / ".c1-sessions",

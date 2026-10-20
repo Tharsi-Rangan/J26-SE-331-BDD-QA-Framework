@@ -772,6 +772,9 @@ def generate_candidates_run(
     from c1_requirement_quality.source_integrity import verify_source, VerifiedWorkflowContext
 
     srs_text, _source_manifest = verify_source(input_path, srs_path)
+    if getattr(backend, "generation_kind", None) == "api_llm":
+        from c1_requirement_quality.source_integrity import require_cloud_shareable
+        require_cloud_shareable(_source_manifest)
     from c1_requirement_quality.source_integrity import require_refinement_grounding
     require_refinement_grounding(_source_manifest)
     from c1_requirement_quality.workflow_persistence import load_state, current_answer_actions
