@@ -12,7 +12,7 @@ from contextlib import contextmanager
 
 from c1_requirement_quality.source_integrity import verify_source, _verify_snapshot
 from c1_requirement_quality.workflow_persistence import load_state
-from c1_requirement_quality.refinement import stable_candidate_id, _evaluate_candidate, _consistency_with_candidate, _candidate_validation
+from c1_requirement_quality.refinement import stable_candidate_id, _evaluate_candidate, _consistency_with_candidate, _candidate_validation, clarification_questions_for
 from c1_requirement_quality.tier_classifier import classify_tier
 from c1_requirement_quality.validation_lifecycle import clarification_resolution
 from c1_requirement_quality.clarification_proposals import _load_diagnostics, _context, validate_proposal
@@ -47,7 +47,10 @@ def _verified_journal(workspace: Path, anchor=None) -> list[dict[str, Any]]:
 def _write(path: Path, value: Any) -> None:
     """Atomically publish a new journal/action file, never replace existing content."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    pending = path.with_name(path.name + ".pending-" + uuid.uuid4().hex)
+    # Keep the exclusive staging name independent of the destination filename.
+    # Candidate evidence directories already contain a full SHA-256; appending
+    # both the destination name and UUID can exceed Windows MAX_PATH.
+    pending = path.with_name(".pending-" + uuid.uuid4().hex)
     binary = isinstance(value, bytes)
     with pending.open("xb" if binary else "x", encoding=None if binary else "utf-8") as stream:
         if binary:
@@ -490,6 +493,33 @@ class DemoSession:
         return [{**copy.deepcopy(event), "active": event["basis"] == basis}
                 for event in current._approval_intents]
 
+    def generate_review_questions(self, requirement_ids=None):
+        """Record neutral rule-derived questions, never stakeholder answers."""
+        from c1_requirement_quality.quality_analyser import analyse_requirement
+        data, _, _, state = self.review_read()
+        known = {row["requirement_id"] for row in data["requirements"]}
+        if requirement_ids is not None and not set(requirement_ids) <= known:
+            raise ValueError("Unknown clarification requirement ID")
+        generated = []
+        for row in data["requirements"]:
+            rid = row["requirement_id"]
+            if requirement_ids is not None and rid not in requirement_ids:
+                continue
+            questions = clarification_questions_for(row["original_text"])
+            for finding in analyse_requirement(row["original_text"]):
+                if finding["type"] == "incomplete":
+                    continue
+                questions.append(f"What stakeholder-defined, verifiable criterion should clarify "
+                                 f"'{finding['evidence_span']}' in this requirement?")
+            existing = {q["text"] for q in state["requirements"][rid]["questions"].values()}
+            questions = list(dict.fromkeys(q for q in questions if q not in existing))
+            if questions:
+                self.review_action({"requirement_id": rid, "clarification_questions": questions},
+                                   "system:quality-rules", True)
+                generated.append({"requirement_id": rid, "questions": questions,
+                                  "source": "deterministic_quality_rules", "answers": []})
+        return generated
+
     def generate_review_candidates(self, requirement_ids=None, *, backend=None):
         """Use existing offline generator and ranking after trusted receipt registration."""
         from c1_requirement_quality.rewrite_generator import generate_candidate_suggestions, DeterministicSubstitutionBackend
@@ -501,6 +531,7 @@ class DemoSession:
         session = self
         generator = backend or DeterministicSubstitutionBackend(structural_only_alternative=True)
         class RegisteredBackend:
+            generation_kind = getattr(generator, "generation_kind", None)
             def __init__(self):
                 self.index = 0
             def generate(self, *args, **kwargs):

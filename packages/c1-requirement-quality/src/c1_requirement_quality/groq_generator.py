@@ -45,6 +45,8 @@ def _strict_json(raw: str | bytes) -> Any:
 class GroqGeneratorBackend:
     """Generate one structured Qwen proposal; existing C1 checks remain authoritative."""
 
+    generation_kind = "api_llm"
+
     def __init__(self, api_key: str, model: str, *, timeout: float = 30.0, max_output_tokens: int = 512) -> None:
         if not isinstance(api_key, str) or not api_key.strip() or any(c in api_key for c in "\r\n"):
             raise GroqGenerationError("Groq API key is missing or invalid")
@@ -82,7 +84,8 @@ class GroqGeneratorBackend:
         request = urllib.request.Request(
             "https://api.groq.com/openai/v1/chat/completions",
             data=json.dumps(payload).encode("utf-8"), method="POST",
-            headers={"Authorization": "Bearer " + self._api_key, "Content-Type": "application/json"},
+            headers={"Authorization": "Bearer " + self._api_key, "Content-Type": "application/json",
+                     "User-Agent": "c1-requirement-quality/0.1", "Accept": "application/json"},
         )
         try:
             opener = urllib.request.build_opener(_NoRedirect())

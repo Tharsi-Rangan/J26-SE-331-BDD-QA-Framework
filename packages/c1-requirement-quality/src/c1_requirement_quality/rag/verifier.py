@@ -96,9 +96,22 @@ class LocalNLI:
         return self.classify_with_diagnostics(premise, hypothesis)["label"]
 
 
+def _obligation_text(text: str) -> str:
+    """Remove a leading document label, never an ID inside the obligation.
+
+    Require a known requirement-label vocabulary and an explicit obligation
+    after it. Evidence quotations and retrieval coordinates remain untouched.
+    """
+    return re.sub(
+        r"^\s*(?:FR|NFR|REQ(?:-[A-Z][A-Z0-9]*)?)[- ]\d+(?:[.:)])?\s+"
+        r"(?=(?:The\s+)?[A-Za-z][^\n.!?]*\b(?:shall|must|should|may|can|will)\b)",
+        "", text, count=1, flags=re.I,
+    )
+
+
 def _tokens(text: str) -> tuple[str, ...]:
     # Ignore only a structural numbered-list prefix, never factual numbers.
-    text = re.sub(r"^\s*\d+[.)]\s+", "", text)
+    text = _obligation_text(re.sub(r"^\s*\d+[.)]\s+", "", text))
     return tuple(COMPARISON_TOKEN_PATTERN.findall(text.lower()))
 
 
@@ -198,7 +211,7 @@ def verify_symbolically(fact: Fact, evidence: str, evidence_id: str) -> Verifica
     if fact.constraints:
         candidate_sig = _content_signature(fact.text)
         if candidate_sig and candidate_sig == _content_signature(evidence):
-            evidence_facts = extract_facts(evidence, use_spacy=False)
+            evidence_facts = extract_facts(_obligation_text(evidence), use_spacy=False)
             for candidate_constraint in fact.constraints:
                 for source_fact in evidence_facts:
                     for source_constraint in source_fact.constraints:

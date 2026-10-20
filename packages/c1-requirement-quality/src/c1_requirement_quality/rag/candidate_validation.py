@@ -28,8 +28,8 @@ def verification_policy() -> dict[str, Any]:
     assets and retrieval top_k are separately checked by the existing loader.
     """
     configuration = {
-        "symbolic": "obligation-and-numeric-interval-v1",
-        "applicability": "explicit-obligation-signature-v1",
+        "symbolic": "obligation-and-numeric-interval-labels-v2",
+        "applicability": "explicit-obligation-signature-labels-v2",
         "fact_extraction": "rule-based-no-spacy-v1",
         "placeholders": "incomplete-facts-never-supported-v1",
         "passage_aggregation": "error-contradiction-support-v1",

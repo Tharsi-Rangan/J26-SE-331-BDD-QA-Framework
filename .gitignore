@@ -36,3 +36,19 @@ packages/c1-requirement-quality/models/**/tokenizer*.json
 
 # Local C1 inference outputs and portable research workspaces
 /packages/c1-requirement-quality/local-inference/
+
+# C1 - Local demonstration and test outputs
+/test-output/
+
+# C1 - Local ML model artifacts
+/packages/c1-requirement-quality/models/
+
+# Environment files and secrets
+.env.*
+!.env.example
+!.env.template
+
+# Python generated files
+*.py[cod]
+.mypy_cache/
+.ruff_cache/

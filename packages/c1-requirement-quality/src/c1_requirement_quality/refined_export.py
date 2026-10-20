@@ -17,6 +17,8 @@ def export_refined_srs(session, out: Path):
     if out.exists():
         raise FileExistsError("Export folder already exists; choose a new folder")
     data, _, manifest, state = session.read()
+    from c1_requirement_quality.ingest.dispatcher import load_srs_document
+    source_items = load_srs_document(session.source).requirements
     draft = session.review_read()[3]
     initial_rag = []
     if manifest.get("rag_policy"):
@@ -62,6 +64,8 @@ def export_refined_srs(session, out: Path):
         selected = pending["candidates"].get(pending["selected_candidate_id"])
         status = "approved" if approved else "rejected" if row["human_decision"] == "rejected" or selected and selected["status"] == "REJECTED" else "unresolved"
         rows.append({"requirement_id": rid, "source_location": row.get("source"),
+            "source_document_item": next((item.doc_item_number for item in source_items
+                if item.raw_text == row["original_text"] and item.to_source_dict() == row.get("source")), None),
             "original_text": row["original_text"], "final_text": final,
             "status": status, "human_decision": row["human_decision"],
             "tier": row["tier"] if approved else baseline.get("tier", row["tier"]),
@@ -111,6 +115,8 @@ def export_refined_srs(session, out: Path):
     document.add_paragraph(f"Quality findings: {summary['quality_issues_before']} before, {summary['quality_issues_after']} after. Unsupported details are not filled in.")
     for row in rows:
         document.add_heading(row["requirement_id"] + " — " + row["status"].upper(), 1)
+        if row["source_document_item"]:
+            document.add_paragraph("Original document ID: " + row["source_document_item"])
         document.add_paragraph(row["final_text"])
         document.add_paragraph("Original: " + row["original_text"])
         document.add_paragraph(f"Tier: {row['tier']}; approval: {row['human_decision']}; BDD-ready: {row['bdd_ready']}.")
@@ -123,6 +129,7 @@ def export_refined_srs(session, out: Path):
         for answer in row["clarifications"]["answers"]:
             document.add_paragraph("Human answer (" + answer["actor_id"] + "): " + answer["answer"])
         lines.extend(["## " + row["requirement_id"] + " — " + row["status"].upper(),
+            "Original document ID: " + (row["source_document_item"] or "not specified"),
             "Original: " + row["original_text"], "Final: " + row["final_text"],
             "Tier: " + row["tier"], "BDD-ready: " + str(row["bdd_ready"]),
             "Grounding: " + json.dumps(row["grounding"], ensure_ascii=False),

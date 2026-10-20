@@ -1011,9 +1011,13 @@ class Wizard:
             choice = self.menu("Clarification options", [
                 "Suggest clarification questions using Groq/Qwen (external API)",
                 "Back",
+                "Generate neutral clarification questions from quality rules (offline)",
             ])
             if choice == 1:
                 self.suggest_clarifications_groq(session, requirement_id=requirement_id)
+            elif choice == 3:
+                generated = session.generate_review_questions([requirement_id] if requirement_id else None)
+                self.tell(f"Generated questions for {len(generated)} requirements; no answers or approval recorded.")
             return
         for row, question in questions:
             self.tell(row["requirement_id"] + ": " + row["original_text"])

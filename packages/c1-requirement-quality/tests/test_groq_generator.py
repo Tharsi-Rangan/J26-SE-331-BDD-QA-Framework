@@ -54,6 +54,8 @@ def test_backend_protocol_and_structured_proposal(transport):
     assert proposals[0]["source_evidence"]["source"] == "groq"
     request, timeout = transport["calls"][0]
     assert request.full_url == "https://api.groq.com/openai/v1/chat/completions"
+    assert request.get_header("User-agent") == "c1-requirement-quality/0.1"
+    assert request.get_header("Accept") == "application/json"
     assert json.loads(request.data)["model"] == MODEL
     assert timeout == 30 and len(transport["calls"]) == 1
 
@@ -172,6 +174,8 @@ def test_mocked_live_cli_path_publishes_only_sidecar(tmp_path, transport, monkey
     assert main(['generate-candidates', '--in', str(path), '--srs', str(source),
                  '--out', str(output), '--backend', 'groq']) == 0
     report = json.loads(output.read_text())
+    assert report['generator']['backend'] == 'GroqGeneratorBackend'
+    assert report['generator']['baseline_type'] == 'API LLM proposal generator'
     row = report['requirements'][0]
     assert row['requirement_id'] == rid and row['original_text'] == 'The system shall send email.'
     assert row['ranked_candidates'] == []

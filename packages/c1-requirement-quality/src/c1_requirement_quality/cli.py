@@ -51,6 +51,9 @@ def build_parser() -> argparse.ArgumentParser:
     demo_parser.add_argument("--document-id")
     demo_parser.add_argument("--wizard", action="store_true", help="resume the complete numbered wizard")
     publish_parser = sub.add_parser("publish-approved", help="publish current journal-backed approval intents")
+    questions_parser = sub.add_parser("generate-review-questions", help="record neutral rule-based questions without answers or approval")
+    questions_parser.add_argument("--session", required=True)
+    questions_parser.add_argument("--requirement-id", action="append")
     publish_parser.add_argument("--session", required=True)
     publish_parser.add_argument("--reviewer", required=True)
     publish_parser.add_argument("--confirm", required=True, choices=("yes",))
@@ -691,6 +694,12 @@ def main(argv: list[str] | None = None) -> int:
                         source=Path(args.srs) if args.srs else None, run_id=args.run_id,
                         registry=Path(args.registry) if args.registry else None,
                         project_code=args.project_code, document_id=args.document_id)
+            return 0
+        if args.command == "generate-review-questions":
+            from c1_requirement_quality.demo_workflow import DemoSession, _session_lock
+            with _session_lock(Path(args.session)):
+                generated = DemoSession(Path(args.session)).generate_review_questions(args.requirement_id)
+                print(json.dumps(generated, indent=2, ensure_ascii=False))
             return 0
         if args.command in {"publish-approved", "export-refined"}:
             from c1_requirement_quality.demo_workflow import DemoSession, _session_lock

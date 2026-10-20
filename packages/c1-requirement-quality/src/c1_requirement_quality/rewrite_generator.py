@@ -719,7 +719,9 @@ def generate_candidate_suggestions(
         "source_document": source_document,
         "generator": {
             "backend": backend.__class__.__name__,
-            "baseline_type": "rule-based baseline generator",
+            "baseline_type": ("API LLM proposal generator"
+                              if getattr(backend, "generation_kind", None) == "api_llm"
+                              else "rule-based baseline generator"),
             "grounding_mode_requested": grounding_mode,
             "grounding_mode_used": "rag" if grounding_context is not None else "lexical",
             "grounding_mode_errors": [],
