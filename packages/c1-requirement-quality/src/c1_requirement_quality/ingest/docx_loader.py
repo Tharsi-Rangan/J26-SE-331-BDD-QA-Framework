@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from c1_requirement_quality.ingest.classifier import (
-    MODAL_PATTERN, is_requirement_section, is_introductory_section, is_use_case_section,
+    MODAL_PATTERN, classify_docx_statement, is_docx_requirement_section, is_requirement_section,
 )
 from c1_requirement_quality.ingest.models import (
     ExtractionWarning,
@@ -18,7 +18,7 @@ from c1_requirement_quality.ingest.models import (
 
 DOCX_REQ_PATTERN = re.compile(
     r"^\s*(?:[-*]\s*)?(?P<number>(?:REQ(?:UIREMENT)?[- ]?)?\d+(?:\.\d+)*|[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+)(?:[.):]|\s+-)?\s+(?P<text>[A-Za-z].*)$",
-    re.IGNORECASE,
+    re.IGNORECASE | re.DOTALL,
 )
 
 
@@ -26,10 +26,6 @@ FUNCTIONAL_BLOCK = re.compile(r"^Functional Requirement\s+(\d+)\s*$", re.IGNOREC
 HEADING_REQUIREMENT = re.compile(r"^(?P<id>(?:NFR|FR|REQ)[-_]\d+(?:[._-]\d+)*)(?:\s*[:.\-\u2013\u2014]\s*.+)?$", re.IGNORECASE)
 ID_HEADERS = {"id", "req", "req id", "requirement id", "requirement number", "req number", "item", "item number", "number", "#"}
 TEXT_HEADERS = {"requirement", "statement", "description", "specification", "text", "requirement text", "requirement statement"}
-NORMATIVE_PROSE = re.compile(
-    r"^(?:users?\s+need\s+to|only\s+.+\s+can\b|the\s+.+\s+(?:is|are|loads?)\b|there\s+is\b|it\s+gives\b)",
-    re.IGNORECASE,
-)
 
 
 def _word_list(paragraph: Any) -> bool:
@@ -89,6 +85,16 @@ def load_docx_srs(path: Path) -> NIRDocument:
     context_items: list[NIRRequirement] = []
     uncertain_items: list[NIRRequirement] = []
     seen_in_section: set[str] = set()
+
+    def append_statement(*, structured: bool = False, **fields: Any) -> None:
+        category, sub_category, reason = classify_docx_statement(
+            fields["raw_text"], current_section, structured=structured,
+        )
+        record = NIRRequirement(
+            section_title=current_section, section_hierarchy=list(hierarchy),
+            category=category, sub_category=sub_category, classification_reason=reason, **fields,
+        )
+        {"REQUIREMENT": requirements, "CONTEXT": context_items, "UNCERTAIN": uncertain_items}[category].append(record)
 
     # 1. Extract tables
     for tab_idx, table in enumerate(doc.tables, start=1):
@@ -157,19 +163,12 @@ def load_docx_srs(path: Path) -> NIRDocument:
                 if non_id_parts:
                     req_text_val = " ".join(non_id_parts)
 
-            if req_text_val and (req_id_val or MODAL_PATTERN.search(req_text_val)):
+            if req_text_val:
                 doc_item = req_id_val if req_id_val else f"{table_id}-R{r_idx}"
-                requirements.append(
-                    NIRRequirement(
-                        doc_item_number=doc_item,
-                        section_title=current_section,
-                        section_hierarchy=list(hierarchy),
-                        raw_text=req_text_val.strip(),
-                        page=None,
-                        line=r_idx,
-                        table_id=table_id,
-                        provenance_notes=f"Row {r_idx}",
-                    )
+                append_statement(
+                    structured=bool(req_id_val or text_col_idx >= 0),
+                    doc_item_number=doc_item, raw_text=req_text_val.strip(),
+                    page=None, line=r_idx, table_id=table_id, provenance_notes=f"Row {r_idx}",
                 )
 
     # 2. Extract paragraphs
@@ -191,10 +190,7 @@ def load_docx_srs(path: Path) -> NIRDocument:
         heading_id = HEADING_REQUIREMENT.fullmatch(text) if style_name.startswith("Heading") else None
         ancestors = block_sections[p._p][:-1]
         governing = ancestors[-1] if ancestors else ""
-        if (heading_id and is_requirement_section(governing)
-                and not is_introductory_section(governing)
-                and not is_use_case_section(governing)
-                and not any(w in governing.lower() for w in ("database", "assumptions", "dependencies"))):
+        if heading_id and is_docx_requirement_section(governing):
             cursor = p_idx + 1
             body = paragraphs[cursor] if cursor < total_paragraphs else None
             adjacent = body is not None and body._p.getprevious() is p._p
@@ -203,11 +199,11 @@ def load_docx_srs(path: Path) -> NIRDocument:
                     and not DOCX_REQ_PATTERN.match(body_text) and not _word_list(body)
                     and not body_text.endswith((":", "?"))
                     and re.search(r"\b(?:shall|must|will|should|may|can)\b", body_text, re.I)):
-                requirements.append(NIRRequirement(
-                    doc_item_number=heading_id.group("id"), section_title=governing,
-                    section_hierarchy=list(ancestors), raw_text=body_text,
+                current_section, hierarchy = governing, ancestors
+                append_statement(
+                    structured=True, doc_item_number=heading_id.group("id"), raw_text=body_text,
                     line=cursor + 1, provenance_notes=f"DOCX requirement heading paragraph {p_idx + 1}: {text}; body paragraph {cursor + 1}",
-                ))
+                )
                 p_idx = cursor + 1
                 continue
             warnings.append(ExtractionWarning(
@@ -260,46 +256,34 @@ def load_docx_srs(path: Path) -> NIRDocument:
                 fields[field.group(1).upper()] = field.group(2)
                 cursor += 1
             complete = {"TITLE", "DESC"} <= fields.keys()
+            if complete:
+                append_statement(
+                    structured=True, doc_item_number=text, raw_text=fields["DESC"],
+                    line=start + 1, provenance_notes=f"Paragraphs {start + 1}-{cursor}; {text}; TITLE: {fields['TITLE']}",
+                )
+                p_idx = cursor
+                continue
             record = NIRRequirement(
                 doc_item_number=text, section_title=current_section, section_hierarchy=list(hierarchy),
-                raw_text=fields["DESC"] if complete else " ".join(q.text.strip() for q in paragraphs[start:cursor]),
+                raw_text=" ".join(q.text.strip() for q in paragraphs[start:cursor]),
                 line=start + 1, provenance_notes=f"Paragraphs {start + 1}-{cursor}; {text}; TITLE: {fields.get('TITLE', '')}",
-                category="REQUIREMENT" if complete else "UNCERTAIN",
-                classification_reason="Explicit functional title/description block" if complete else "Incomplete functional block",
+                category="UNCERTAIN", classification_reason="Incomplete functional block",
             )
-            (requirements if complete else uncertain_items).append(record)
+            uncertain_items.append(record)
             p_idx = cursor
             continue
 
         section = " > ".join(hierarchy)
-        relevant = (is_requirement_section(current_section)
-                    and not is_introductory_section(current_section)
-                    and not is_use_case_section(current_section)
-                    and not any(word in current_section.lower() for word in ("database", "assumptions", "dependencies")))
+        relevant = is_docx_requirement_section(current_section)
         listed = _word_list(p)
         # Lists and modal-less obligations need requirement-section context.
         if (relevant or (listed and is_requirement_section(section))) and not DOCX_REQ_PATTERN.match(text):
-            normative = bool(MODAL_PATTERN.search(text) or NORMATIVE_PROSE.search(text))
-            introduction = text.endswith(":") or text.upper().startswith(("TITLE:", "DESC:"))
-            if introduction and normative:
-                context_items.append(NIRRequirement(
-                    doc_item_number=f"Paragraph-{p_idx + 1}", section_title=current_section,
-                    section_hierarchy=list(hierarchy), raw_text=text, line=p_idx + 1,
-                    category="CONTEXT", sub_category="EXPLANATION",
-                    classification_reason="Requirement list introduction",
-                ))
-                p_idx += 1
-                continue
-            if normative or listed:
-                accepted = relevant and normative and not introduction
-                record = NIRRequirement(
-                    doc_item_number=f"Paragraph-{p_idx + 1}", section_title=current_section,
-                    section_hierarchy=list(hierarchy), raw_text=text, line=p_idx + 1,
+            category, _, _ = classify_docx_statement(text, current_section)
+            if category != "UNCERTAIN" or listed or MODAL_PATTERN.search(text):
+                append_statement(
+                    doc_item_number=f"Paragraph-{p_idx + 1}", raw_text=text, line=p_idx + 1,
                     provenance_notes="DOCX Word list paragraph" if listed else "DOCX normative paragraph",
-                    category="REQUIREMENT" if accepted else "UNCERTAIN",
-                    classification_reason="Normative prose in requirement section" if accepted else "List item needs review",
                 )
-                (requirements if accepted else uncertain_items).append(record)
                 p_idx += 1
                 continue
 
@@ -320,11 +304,12 @@ def load_docx_srs(path: Path) -> NIRDocument:
             seen_in_section.add(source_number)
 
             collected = [initial_text]
+            category, _, _ = classify_docx_statement(initial_text, current_section, structured=True)
             req_start_p = p_idx + 1
             p_idx += 1
 
             # Accumulate multiline continuation paragraphs
-            while p_idx < total_paragraphs:
+            while category == "REQUIREMENT" and p_idx < total_paragraphs:
                 cand_p = paragraphs[p_idx]
                 # A table interrupts paragraph flow; never merge across it.
                 if cand_p._p.getprevious() is not paragraphs[p_idx - 1]._p:
@@ -337,7 +322,8 @@ def load_docx_srs(path: Path) -> NIRDocument:
                     break
                 if (cand_style.startswith("Heading") or DOCX_REQ_PATTERN.match(cand_text)
                         or FUNCTIONAL_BLOCK.fullmatch(cand_text) or _word_list(cand_p)
-                        or (relevant and MODAL_PATTERN.search(cand_text))):
+                        or classify_docx_statement(cand_text, current_section, structured=True)[0] != "UNCERTAIN"
+                        or (collected[-1].endswith((".", "!", "?")) and cand_text[0].isupper())):
                     break
                 if cand_text.isupper() and len(cand_text) < 70:
                     break
@@ -352,17 +338,10 @@ def load_docx_srs(path: Path) -> NIRDocument:
             # preserving every original paragraph verbatim in source_blocks.
             normalized_paragraphs[p._p] = text + (" " + " ".join(collected[1:]) if len(collected) > 1 else "")
 
-            requirements.append(
-                NIRRequirement(
-                    doc_item_number=source_number,
-                    section_title=current_section,
-                    section_hierarchy=list(hierarchy),
-                    raw_text=" ".join(collected),
-                    page=None,
-                    line=req_start_p,
-                    table_id=None,
-                    provenance_notes="DOCX paragraph flow",
-                )
+            append_statement(
+                structured=True, doc_item_number=source_number, raw_text=" ".join(collected),
+                page=None, line=req_start_p, table_id=None,
+                provenance_notes=f"DOCX paragraph flow; paragraphs {req_start_p}-{p_idx}",
             )
             continue
 

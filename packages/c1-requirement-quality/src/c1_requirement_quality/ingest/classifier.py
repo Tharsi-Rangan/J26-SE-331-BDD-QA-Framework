@@ -152,6 +152,70 @@ def is_requirement_section(sec: str) -> bool:
     return any(kw in s for kw in REQUIREMENT_SECTION_KEYWORDS)
 
 
+def is_docx_requirement_section(section: str) -> bool:
+    """Recognize normative DOCX sections without changing other loaders' policy."""
+    return bool(
+        (is_requirement_section(section) or re.search(r"\bconstraints?\b", section, re.I))
+        and not is_introductory_section(section)
+        and not is_use_case_section(section)
+        and not any(word in section.lower() for word in ("database", "assumptions", "dependencies"))
+    )
+
+
+DOCX_NORMATIVE_PROSE = re.compile(
+    r"^(?:users?\s+need\s+to|only\s+.+\s+can\b|the\s+.+\s+(?:is|are|loads?)\b|there\s+is\b|it\s+gives\b)",
+    re.IGNORECASE,
+)
+DOCX_OBLIGATION = re.compile(
+    # A subject/condition followed by an obligation or capability predicate.
+    # A modal in a question, label or isolated fragment is insufficient.
+    r"^[^.!?:;\n]{1,160}\b(?:shall|must|will|should|may|can)\s+(?:not\s+)?[a-z]",
+    re.IGNORECASE,
+)
+DOCX_UNRESOLVED = re.compile(
+    r"\b(?:has|have)\s+not\s+been\s+(?:agreed|decided|defined|determined)\b|"
+    r"\b(?:is|are|remains?)\s+(?:disputed|undecided|unresolved|not\s+(?:agreed|decided|defined))\b|"
+    r"\b(?:decision|value|duration|limit)\s+(?:is\s+)?(?:pending|TBD)\b",
+    re.IGNORECASE,
+)
+DOCX_GUIDANCE = re.compile(
+    r"^(?:explanation|note|rationale|review(?:er)?\s+guidance)\s*:|"
+    r"^(?:(?:a|the)\s+)?(?:reviewers?|stakeholders?|auditors?)\s+"
+    r"(?:(?:shall|must|should|will|need\s+to)\s+)?(?:check|review|verify|flag|assess|confirm)\b"
+    r".{0,100}\b(?:requirements?|statements?|decisions?|evidence|explanation|source|wording|specification)\b|"
+    r"^(?:(?:the|this|that|a)\s+)?(?:[\w-]+\s+){0,2}(?:statement|requirement|document)\b.{0,100}"
+    r"\b(?:flagged|reviewed|human/security\s+review|intentionally\s+conflict)\b",
+    re.IGNORECASE,
+)
+
+
+def classify_docx_statement(text: str, section: str, *, structured: bool = False) -> tuple[str, str, str]:
+    """Classify a DOCX candidate using meaning and its source structure.
+
+    ``structured`` means an identified paragraph, requirement body/block or
+    table row, never a particular ID prefix. Unrecognized candidates remain
+    uncertain; ordinary narrative stays in raw_text/source_blocks.
+    """
+    text = text.strip()
+    if DOCX_GUIDANCE.search(text):
+        return "CONTEXT", "REVIEW_GUIDANCE", "Explanation or human review guidance"
+    obligation = bool(DOCX_OBLIGATION.search(text))
+    if DOCX_UNRESOLVED.search(text):
+        if obligation:
+            return "UNCERTAIN", "", "Obligation mixed with an unresolved decision"
+        return "CONTEXT", "UNRESOLVED_DECISION", "Records an unresolved decision rather than an obligation"
+    if text.endswith(":"):
+        return "CONTEXT", "EXPLANATION", "Requirement list introduction"
+    if text.endswith("?"):
+        return "UNCERTAIN", "", "Question needs human review"
+    relevant = is_docx_requirement_section(section)
+    if obligation and (relevant or structured):
+        return "REQUIREMENT", "", "Subject and obligation/capability predicate in structured source"
+    if relevant and (DOCX_NORMATIVE_PROSE.search(text) or CONSTRAINT_PREDICATES.search(text)):
+        return "REQUIREMENT", "", "Declarative obligation or constraint in a normative section"
+    return "UNCERTAIN", "", "Source candidate lacks a clear standalone obligation"
+
+
 def detect_repeated_headers_footers(pages_data: list[dict[str, Any]]) -> set[str]:
     """Detect running headers/footers repeated across >= 20% of pages (min 3 pages)."""
     from collections import Counter

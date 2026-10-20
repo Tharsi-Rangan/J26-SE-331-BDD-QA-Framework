@@ -53,6 +53,26 @@ c1 run --srs <file> --out runs/<RUN-DIRECTORY> --run-id <RUN-ID> --registry <reg
 pytest
 ```
 
+### DOCX requirement classification
+
+DOCX paragraph and table candidates use statement meaning, section context and
+source structure. An identifier or modal word alone does not establish a
+requirement. Constraints may contain genuine functional or non-functional
+obligations; unresolved decisions and requirement-review guidance remain context,
+and ambiguous candidates remain uncertain. The Mini Library fixture yields
+13 requirements (including C-01), four context records (C-02 through C-05), and
+zero uncertain records. Contradictory or insecure requirements remain requirements
+for review.
+
+Independent obligations and guidance start separate paragraphs; continuation
+fragments remain attached to their requirement. Original paragraphs, labels and
+tables remain in the archived source and NIR source blocks, alongside normalized
+grounding text. Ordinary narrative and headings remain source evidence without
+necessarily creating context records. Classification is deterministic and
+heuristic, not a general language-understanding model. Other format loaders retain
+their existing classification rules. Deterministic consistency compares extracted
+requirements; context is retained for grounding and human review.
+
 ### Requirement registry selection
 
 Pass `--registry <path>` explicitly. C1 does not choose a historical default.
