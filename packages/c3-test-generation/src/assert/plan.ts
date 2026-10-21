@@ -657,13 +657,16 @@ export function ungroundedStrings(
 ): string[] {
   // the Examples table is part of the scenario: its cells are stated values too
   const cells = sc.examples.flatMap((r) => Object.values(r.values));
+  const columns = new Set(sc.examples.flatMap((r) => Object.keys(r.values)));
   const text = `${stepText(sc)} ${cells.join(' ')}`.toLowerCase();
   const out: string[] = [];
   const walk = (v: unknown) => {
     if (Array.isArray(v)) v.forEach(walk);
     else if (v && typeof v === 'object') Object.values(v).forEach(walk);
     else if (typeof v === 'string') {
-      if (/<[^<>]+>/.test(v)) return;
+      // fix-7 (C3 batch hexo-7): only a real <column> makes a template; other <...> is HTML text that must be
+      // stated like any other string ("<h1>Intro</h1>" for content "<h1 id='intro'>Intro</h1>" was not).
+      if ([...v.matchAll(/<([^<>]+)>/g)].some((m) => columns.has(m[1]!))) return;
       if (/^typeof\b/.test(actual.trim()) && TYPEOF_WORDS.has(v)) return;
       if (v.trim() && !text.includes(v.toLowerCase())) out.push(v);
     }

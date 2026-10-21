@@ -169,6 +169,27 @@ describe('fix-6: HTML inside a string is text, not a <placeholder> (hexo-7)', ()
   });
 });
 
+describe('fix-7: HTML that no step states is an invented value (hexo-7, batch run 2)', () => {
+  test('run 2: expected "<h1>Intro</h1>" for content "<h1 id=\'intro\'>Intro</h1>" is rejected (rules 1, 10)', () => {
+    const { out } = check('hexo-7', 'SCN-HEXO7-001-02', fn('tocHelper', ['str', 'options']), {
+      act: 'tocHelper("<h1 id=\'intro\'>Intro</h1>")',
+      assertions: [
+        { then: 'T1', category: 'equality', actual: 'result', expected: '<h1>Intro</h1>' },
+      ],
+    });
+    expect(out.problems.join('\n')).toMatch(/"<h1>Intro<\/h1>", which no step states/);
+  });
+  test('a "<column>" template in an outline is still not an invented value', () => {
+    const { out } = check('shields-4', 'SCN-SHLD4-001-01', fn('makeBadge', ['data']), {
+      act: 'makeBadge({ text: ["build", "passed"], template: "<template>" })',
+      assertions: [
+        { then: 'T1', category: 'equality', actual: 'typeof result', expected: 'string' },
+      ],
+    });
+    expect(out.problems).toEqual([]);
+  });
+});
+
 describe('fix-6: backslashes and mocks that must fit their type (eslint-23)', () => {
   const RES = fn('resolveFileGlobPatterns', ['patterns', 'options']);
   test('run 1 retry: "src\\app.js" written without doubling the backslash is rejected', () => {

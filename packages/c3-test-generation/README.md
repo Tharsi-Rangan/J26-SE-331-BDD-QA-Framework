@@ -311,6 +311,10 @@ the prompt did not change (still 0.6.0), only the checks, retry messages and def
 | `"src\app.js"` in JavaScript is `srcapp.js` (eslint-23) | A step value with a backslash must be written doubled; the doubled form counts as used (rule 7) |
 | `process.cwd()` mocked as `returns_input` with an object (eslint-23) | Mock values must fit the result type (`cwd()` takes no input and returns a string); typed rule defaults (`'/project'`) |
 
+Fix-7, from batch run 2 (32 tests, 1 bug detected, 1 false alarm): hexo-7 expected `"<h1>Intro</h1>"`, which no step
+states. Strings with `<...>` were skipped by the "value must be stated" check as if they were `<column>` templates;
+now only real Examples columns make a template, and HTML text must be stated like any other string (rules 1, 10).
+
 Found while preparing the batch: a nameless `module.exports = function (...)` (ESLint's `lib/formatters/junit.js`)
 was scanned as `default`, which is not a valid variable name in a test. It is now named after its file
 (`junit.js` -> `junit`, `make-badge.js` -> `makeBadge`, see `nameFromFile`).
