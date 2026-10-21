@@ -111,6 +111,15 @@ C4 checks only `Survived` and `NoCoverage` mutants. A flagged mutant gets `equiv
 | E1-same-code | The mutated code has the same tokens as the original. Whitespace, comments and quote style do not count. |
 | E2-log-only | The change is only inside the arguments of `console.<method>(...)` or `debug(...)`, and those arguments have no assignment, `++`, `--` or call. |
 
+## Preflight of the C3 tests
+
+Before StrykerJS, C4 runs the C3 tests once with Jest on the original code (`src/preflight.ts`).
+C4 writes the result to `c4/preflight.json`.
+
+- The preflight fails when a test file does not load (for example a syntax error), when a test fails, or when Jest runs no tests.
+- When the preflight fails, C4 stops with exit code 1 and does not run StrykerJS. The error lists each file or test and its Jest message.
+- A manifest test that Jest did not run gets a warning and goes in `not_run`.
+
 ## How the StrykerJS run works
 
 - C4 copies the `--in` folder to a temp folder and runs StrykerJS there. The input folder stays clean.
