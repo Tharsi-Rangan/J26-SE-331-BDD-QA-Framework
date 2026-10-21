@@ -1,0 +1,27 @@
+{
+  "contract": "shared.subject-manifest",
+  "schema_version": "1.0.0",
+  "subjects": [
+    {
+      "subject_id": "SUB-HEXO7",
+      "project": "hexo",
+      "project_code": "HEXO7",
+      "source": {
+        "kind": "bugsjs",
+        "bug_id": "Hexo-7",
+        "buggy_ref": "dee3b03d2697ad33675a4b2cf761a9f49c9d2486",
+        "fixed_ref": "b4d917ec7a48c36610e6661306de3a4cfdfc3a52",
+        "repo_path": "subject-src"
+      },
+      "module_path": "lib/plugins/helper/toc.js",
+      "exports": [
+        "tocHelper"
+      ],
+      "module_system": "commonjs",
+      "requirement_ids": [
+        "REQ-HEXO7-001"
+      ],
+      "notes": "C3 batch pilot (PP1). Requirements and scenarios hand-written from the project documentation, not from the bug report or fix: Hexo helper documentation, toc (\"Parses all heading tags (h1~h6) in the content and inserts a table of contents\"; options class, list_number). Run with --subject-root at the buggy_ref."
+    }
+  ]
+}

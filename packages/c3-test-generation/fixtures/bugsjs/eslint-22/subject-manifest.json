@@ -1,0 +1,27 @@
+{
+  "contract": "shared.subject-manifest",
+  "schema_version": "1.0.0",
+  "subjects": [
+    {
+      "subject_id": "SUB-ESL22",
+      "project": "eslint",
+      "project_code": "ESL22",
+      "source": {
+        "kind": "bugsjs",
+        "bug_id": "ESLint-22",
+        "buggy_ref": "d727f17f4efc888ed0e59259a4e4cac01a42f0d9",
+        "fixed_ref": "887e82f7eda3f5cd14d3720f3d6af97036113941",
+        "repo_path": "subject-src"
+      },
+      "module_path": "lib/config/config-validator.js",
+      "exports": [
+        "validateRuleOptions"
+      ],
+      "module_system": "commonjs",
+      "requirement_ids": [
+        "REQ-ESL22-001"
+      ],
+      "notes": "C3 batch pilot (PP1). Requirements and scenarios hand-written from the project documentation, not from the bug report or fix: docs/user-guide/configuring.md, \"Configuring Rules\" (severity values; \"The first item in the array is always the rule severity (number or string)\"). Run with --subject-root at the buggy_ref."
+    }
+  ]
+}

@@ -123,8 +123,17 @@ function grounded(v: string | number, text: string): boolean {
  * for that half. The cross-encoder (requirement text vs. test) replaces this in PP2.
  */
 export function semanticScore(sc: C3ScenarioInput, plan: ScenarioPlan, row?: number): number {
+  return semanticParts(sc, plan, row).score;
+}
+
+/** The two halves of the semantic score (the C3-16 HTML report shows them). */
+export function semanticParts(
+  sc: C3ScenarioInput,
+  plan: ScenarioPlan,
+  row?: number,
+): { agree: number; ground: number; score: number } {
   const c = plan.cases.find((x) => x.row === row) ?? plan.cases[0];
-  if (!c) return 0;
+  if (!c) return { agree: 0, ground: 0, score: 0 };
   const rules = plan.rule_categories.filter((r) => r.row === row);
   const slots = c.assertions.map((i) => plan.assertions[i]!);
   const agree = rules.length
@@ -151,7 +160,8 @@ export function semanticScore(sc: C3ScenarioInput, plan: ScenarioPlan, row?: num
   const total = vals.length + keys.length;
   const ok = vals.filter((v) => grounded(v, text)).length + keys.filter(keyOk).length;
   const ground = total ? ok / total : 1;
-  return Math.round((0.5 * agree + 0.5 * ground) * 1000) / 1000;
+  const r3 = (n: number) => Math.round(n * 1000) / 1000;
+  return { agree: r3(agree), ground: r3(ground), score: r3(0.5 * agree + 0.5 * ground) };
 }
 
 // ---------------------------------------------------------------- Jest result classification

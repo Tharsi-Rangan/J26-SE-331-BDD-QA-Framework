@@ -1,0 +1,56 @@
+{
+  "contract": "c2.scenario-metadata",
+  "schema_version": "1.0.0",
+  "producer": {
+    "component": "MANUAL_FIXTURE",
+    "tool_version": "fixture"
+  },
+  "run_id": "RUN-FIXTURE-HEXO7",
+  "generated_at": "2026-10-21T10:00:00+05:30",
+  "features": [
+    {
+      "feature_file": "c2/features/REQ-HEXO7-001.feature",
+      "requirement_id": "REQ-HEXO7-001",
+      "feature_name": "Table of contents helper",
+      "requirement_text_used": "The toc helper shall parse all heading tags (h1 to h6) in the content and return a table of contents as text; content without heading tags gives an empty table of contents."
+    }
+  ],
+  "scenarios": [
+    {
+      "scenario_id": "SCN-HEXO7-001-01",
+      "requirement_id": "REQ-HEXO7-001",
+      "feature_file": "c2/features/REQ-HEXO7-001.feature",
+      "scenario_name": "Content without headings",
+      "scenario_type": "edge",
+      "is_outline": false,
+      "verification": {
+        "syntax": "pass",
+        "requirement_consistency": {
+          "status": "pass"
+        },
+        "ep_coverage": "skipped",
+        "bva_coverage": "skipped",
+        "completeness": "pass",
+        "fully_verified": true
+      }
+    },
+    {
+      "scenario_id": "SCN-HEXO7-001-02",
+      "requirement_id": "REQ-HEXO7-001",
+      "feature_file": "c2/features/REQ-HEXO7-001.feature",
+      "scenario_name": "Content with one heading",
+      "scenario_type": "positive",
+      "is_outline": false,
+      "verification": {
+        "syntax": "pass",
+        "requirement_consistency": {
+          "status": "pass"
+        },
+        "ep_coverage": "skipped",
+        "bva_coverage": "skipped",
+        "completeness": "pass",
+        "fully_verified": true
+      }
+    }
+  ]
+}

@@ -24,6 +24,7 @@ import { confidenceReport, routeScenarios, stubEntry, stubFile } from './route/c
 import { renderCase } from './assert/templates.js';
 import { createModelClient, readModelConfig, type ModelClient } from './model/index.js';
 import { scanModule } from './scan/scanner.js';
+import { writeRunReport } from './report/html.js';
 import type { ModuleScan } from './scan/types.js';
 
 export type { RunOptions, ScanCommandOptions } from './args.js';
@@ -93,6 +94,7 @@ export {
   classifyFailure,
   isBroken,
   referentialProblems,
+  semanticParts,
   semanticScore,
   syntaxError,
   verifyTests,
@@ -117,6 +119,20 @@ export type { JestRunResult, JestTestResult } from './runner/jest.js';
 export { checkExpression, paramName, renderValue, replacePlaceholders } from './assert/expr.js';
 
 /** C3's version, written as producer.tool_version in every contract file. */
+export {
+  BATCH_REPORT_FILE,
+  REPORT_FILE,
+  renderBatchReport,
+  renderRunReport,
+  scenarioCode,
+  vscodeUrl,
+  writeBatchReport,
+  writeRunReport,
+} from './report/html.js';
+export { isC3Run, loadRun } from './report/load.js';
+export type { RunData } from './report/load.js';
+export { openCommand, openFile } from './report/open.js';
+
 export const TOOL_VERSION: string = JSON.parse(
   fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
 ).version;
@@ -340,6 +356,16 @@ export async function run(
       console.log(
         `  ${r.scenario_id} ${r.route.padEnd(8)} ${r.confidence.toFixed(3)}  ${r.reason}`,
       );
+    // C3-16: one HTML page that shows every step of this run (read-only, from the files above)
+    try {
+      console.log(
+        `[c3] HTML report (C3-16) written to ${writeRunReport(options.out, { generatedAt: options.generatedAt })}`,
+      );
+    } catch (err) {
+      console.log(
+        `[c3] HTML report not written: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 }
 

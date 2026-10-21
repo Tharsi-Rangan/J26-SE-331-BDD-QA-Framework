@@ -6,12 +6,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeSandbox, removeSandbox, runJest, type JestRunResult } from './runner/jest.js';
+import { writeRunReport } from './report/html.js';
 
 export interface PilotOptions {
   run: string; // run folder with c3/ written by `c3 run`
   buggy: string; // subject root, buggy version
   fixed: string; // subject root, fixed version
   label?: string; // e.g. "Express-5"
+  open?: boolean; // the CLI opens the HTML report afterwards
 }
 
 export type Outcome = 'bug_detected' | 'false_alarm' | 'no_signal' | 'not_run';
@@ -43,6 +45,8 @@ export interface PilotSummary {
 
 export interface PilotResult {
   summary: PilotSummary;
+  /** Absolute subject roots of the two versions (the C3-16 report links to their source files). */
+  roots?: { buggy: string; fixed: string };
   tests: PilotTestRow[];
   stubs: { scenario_id: string; reason: string }[];
 }
@@ -196,7 +200,10 @@ export function pilot(o: PilotOptions, log: (l: string) => void = console.log): 
   log(`  buggy: ${summaryLine(buggy)}`);
   const fixed = runOn(o.run, o.fixed);
   log(`  fixed: ${summaryLine(fixed)}`);
-  const result = comparePilot(o.run, buggy, fixed, label);
+  const result: PilotResult = {
+    ...comparePilot(o.run, buggy, fixed, label),
+    roots: { buggy: path.resolve(o.buggy), fixed: path.resolve(o.fixed) },
+  };
   const work = path.join(o.run, 'c3', 'work');
   fs.mkdirSync(work, { recursive: true });
   fs.writeFileSync(path.join(work, 'pilot_results.json'), JSON.stringify(result, null, 2) + '\n');
@@ -204,6 +211,11 @@ export function pilot(o: PilotOptions, log: (l: string) => void = console.log): 
   fs.writeFileSync(path.join(work, 'pilot_results.md'), md);
   log(md);
   log(`[c3] pilot results written to ${path.join(work, 'pilot_results.md')}`);
+  try {
+    log(`[c3] HTML report (C3-16) written to ${writeRunReport(o.run)}`);
+  } catch (err) {
+    log(`[c3] HTML report not written: ${err instanceof Error ? err.message : String(err)}`);
+  }
   return result;
 }
 

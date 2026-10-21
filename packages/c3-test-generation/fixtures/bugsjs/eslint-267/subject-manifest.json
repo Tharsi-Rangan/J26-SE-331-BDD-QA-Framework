@@ -1,0 +1,27 @@
+{
+  "contract": "shared.subject-manifest",
+  "schema_version": "1.0.0",
+  "subjects": [
+    {
+      "subject_id": "SUB-ESL267",
+      "project": "eslint",
+      "project_code": "ESL267",
+      "source": {
+        "kind": "bugsjs",
+        "bug_id": "ESLint-267",
+        "buggy_ref": "705d88f7fd3f7dd525e31ddbab35b6ab45e43d6f",
+        "fixed_ref": "fe1780cd833a3fdfdbfa1c88807aaed744d79adc",
+        "repo_path": "subject-src"
+      },
+      "module_path": "lib/config/config-ops.js",
+      "exports": [
+        "merge"
+      ],
+      "module_system": "commonjs",
+      "requirement_ids": [
+        "REQ-ESL267-001"
+      ],
+      "notes": "C3 batch pilot (PP1). Requirements and scenarios hand-written from the project documentation, not from the bug report or fix: docs/user-guide/configuring.md, \"Extending Configuration Files\" (base \"eqeqeq\": [\"error\", \"allow-null\"] + derived \"eqeqeq\": \"warn\" = [\"warn\", \"allow-null\"]); JSDoc of merge (\"add missing keys\"; \"Overrides in this config object will take priority over base\"). Run with --subject-root at the buggy_ref."
+    }
+  ]
+}

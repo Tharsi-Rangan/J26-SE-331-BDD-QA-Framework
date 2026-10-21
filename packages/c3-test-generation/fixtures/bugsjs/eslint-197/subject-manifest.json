@@ -1,0 +1,27 @@
+{
+  "contract": "shared.subject-manifest",
+  "schema_version": "1.0.0",
+  "subjects": [
+    {
+      "subject_id": "SUB-ESL197",
+      "project": "eslint",
+      "project_code": "ESL197",
+      "source": {
+        "kind": "bugsjs",
+        "bug_id": "ESLint-197",
+        "buggy_ref": "1d6a9c0fac023a6220c9b8287a52d2321e653632",
+        "fixed_ref": "d9495b44308ff54975d89caa007b79d75ffdf6e3",
+        "repo_path": "subject-src"
+      },
+      "module_path": "lib/formatters/junit.js",
+      "exports": [
+        "junit"
+      ],
+      "module_system": "commonjs",
+      "requirement_ids": [
+        "REQ-ESL197-001"
+      ],
+      "notes": "C3 batch pilot (PP1). Requirements and scenarios hand-written from the project documentation, not from the bug report or fix: docs/developer-guide/nodejs-api.md (lint result objects: filePath, messages; built-in \"junit\" formatter) and the JUnit XML report format. Run with --subject-root at the buggy_ref."
+    }
+  ]
+}

@@ -8,6 +8,7 @@
 // C3 checks every slot (parses, known names only, every Then step covered); a bad answer gets one retry,
 // then the scenario is marked `failed` and C3-13 routes it to a stub. A rule-based category guess is kept
 // next to the model's category; their agreement is a confidence signal (C3-13).
+import { ts } from 'ts-morph';
 import { parseJsonAnswer, type ChatMessage, type ModelClient } from '../model/index.js';
 import type { C3Inputs, C3ScenarioInput } from '../input/types.js';
 import type { BehaviourWorkFile } from '../mock/behaviour.js';
@@ -344,6 +345,19 @@ export function checkAssertionAnswer(raw: RawAnswer, ctx: PlanContext): CheckedA
       problems.push(
         `"act" does not use the step value(s) ${unused.map((u) => `${u.value} (${u.step})`).join(', ')}; every Given/When value goes into the call (rule 7)`,
       );
+    // fix-6 (C3 batch shields-4): object fields in the call that nothing names are invented input
+    // (makeBadge({ text: "build", status: "passed" }) for "the badge text \"build\" and \"passed\"").
+    const invented = inventedActKeys(ph.code, sc, ctx);
+    if (invented.length)
+      problems.push(
+        `"act" passes the field(s) ${invented.join(', ')} that no step, the scenario or the documented interface names; build the input only from what the steps say (rule 7)`,
+      );
+    // fix-6 (C3 batch eslint-23): "src\app.js" in a JavaScript string is "srcapp.js"; the backslash must be doubled.
+    const slashes = unescapedBackslashValues(sc, act);
+    if (slashes.length)
+      problems.push(
+        `"act": write ${slashes.map((v) => `"${v}" as ${JSON.stringify(v)}`).join(', ')} in JavaScript (a backslash in a string must be doubled)`,
+      );
   }
 
   // assertions
@@ -432,6 +446,13 @@ export function checkAssertionAnswer(raw: RawAnswer, ctx: PlanContext): CheckedA
           problems.push(
             `${where}: "expected" has ${ungrounded.map((u) => `"${u}"`).join(', ')}, which no step states; use only values from the steps (rules 1, 10)`,
           );
+        // fix-6 (C3 batch hexo-7): the Given input copied as the expected output ("Then ... is returned as text"
+        // -> toBe("<h1 id='intro'>Intro</h1>")). An expected text or number must be stated by a Then step.
+        const copied = copiedFromInput(slot.expected, sc, ctx);
+        if (copied !== undefined)
+          problems.push(
+            `${where}: "expected" ${JSON.stringify(copied)} is the input of a Given/When step; no Then step states it as the result (rule 1)`,
+          );
         // C3-14 control run: "accepted" is an outcome label of the Examples table, not a return value
         const label = outcomeLabel(slot.expected, slot.actual ?? 'result', sc, ctx);
         if (label)
@@ -440,13 +461,17 @@ export function checkAssertionAnswer(raw: RawAnswer, ctx: PlanContext): CheckedA
           );
         // C3-14 run 2: keys of an expected object are field names too (rule 8)
         if (isObj(slot.expected)) {
+          // fix-6: keys of a JSON object a Then step writes out ({"foo": true}) are named by that step
+          const stated = new Set(
+            jsonLiterals(thenText(sc)).flatMap((x) => objectKeys(x).map((k) => k.toLowerCase())),
+          );
           const badKeys = inventedResultFields(
             Object.keys(slot.expected)
               .map((k) => `result.${k}`)
               .join(' '),
             sc,
             ctx,
-          );
+          ).filter((k) => !stated.has(k.toLowerCase()));
           if (badKeys.length)
             problems.push(
               `${where}: "expected" uses field(s) ${badKeys.join(', ')} that no step names (rule 8)`,
@@ -537,6 +562,32 @@ export function checkAssertionAnswer(raw: RawAnswer, ctx: PlanContext): CheckedA
       }
     });
   }
+  // fix-6 rule 12 (C3 batch eslint-273): a Then step that writes the expected value as a JSON list or object is
+  // checked against that whole value, not only its length or type (result.length 2 for "[2]" failed on correct code).
+  if (assertions.length) {
+    let t = 0;
+    for (const st of sc.steps) {
+      if (st.keyword !== 'Then') continue;
+      const id = `T${++t}`;
+      const lits = jsonLiterals(st.text).map(canonical);
+      if (!lits.length) continue;
+      const ok = assertions.some(
+        (a) =>
+          a.then === id &&
+          a.category === 'equality' &&
+          a.expected !== undefined &&
+          lits.includes(canonical(a.expected)),
+      );
+      if (!ok)
+        problems.push(
+          `Then step ${id} states the value ${jsonLiterals(st.text)
+            .map((x) => JSON.stringify(x))
+            .join(
+              ' or ',
+            )}; check it with one equality assertion whose "expected" is exactly that value (rule 12)`,
+        );
+    }
+  }
   const cases = buildCases(sc, assertions);
   for (const c of cases) {
     const label = c.row ? `row ${c.row}` : 'the scenario';
@@ -576,6 +627,8 @@ export function unusedStepValues(
     // a list value may be passed split up: "127.0.0.1, 10.0.0.1" -> ["127.0.0.1", "10.0.0.1"]
     const usedText = (v: string) =>
       act.includes(v) ||
+      // fix-6: "src\app.js" is written "src\\app.js" in a JavaScript string (eslint-23)
+      (v.includes('\\') && act.includes(JSON.stringify(v).slice(1, -1))) ||
       (v.includes(',') &&
         v
           .split(',')
@@ -604,13 +657,16 @@ export function ungroundedStrings(
 ): string[] {
   // the Examples table is part of the scenario: its cells are stated values too
   const cells = sc.examples.flatMap((r) => Object.values(r.values));
+  const columns = new Set(sc.examples.flatMap((r) => Object.keys(r.values)));
   const text = `${stepText(sc)} ${cells.join(' ')}`.toLowerCase();
   const out: string[] = [];
   const walk = (v: unknown) => {
     if (Array.isArray(v)) v.forEach(walk);
     else if (v && typeof v === 'object') Object.values(v).forEach(walk);
     else if (typeof v === 'string') {
-      if (/<[^<>]+>/.test(v)) return;
+      // fix-7 (C3 batch hexo-7): only a real <column> makes a template; other <...> is HTML text that must be
+      // stated like any other string ("<h1>Intro</h1>" for content "<h1 id='intro'>Intro</h1>" was not).
+      if ([...v.matchAll(/<([^<>]+)>/g)].some((m) => columns.has(m[1]!))) return;
       if (/^typeof\b/.test(actual.trim()) && TYPEOF_WORDS.has(v)) return;
       if (v.trim() && !text.includes(v.toLowerCase())) out.push(v);
     }
@@ -723,8 +779,63 @@ export function unquoteValue(v: unknown, sc: C3ScenarioInput): unknown {
   if (typeof v === 'string') {
     const m = /^(["'])(.+)\1$/.exec(v);
     if (m && stepText(sc).includes(m[2]!)) return m[2]!;
+    // fix-6 (C3 batch eslint-267): a list or object written as JSON text ("[\"warn\", \"allow-null\"]") that a
+    // step states is that list or object, not a string; toBe(text) failed on correct code.
+    const t = v.trim();
+    if (/^[[{]/.test(t)) {
+      try {
+        const parsed: unknown = JSON.parse(t);
+        const key = canonical(parsed);
+        if (jsonLiterals(stepText(sc)).some((x) => canonical(x) === key)) return parsed;
+      } catch {
+        /* not JSON: keep the string */
+      }
+    }
   }
   return v;
+}
+
+/** JSON with object keys sorted, so two equal values give the same text. */
+export function canonical(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`;
+  if (v && typeof v === 'object')
+    return `{${Object.keys(v as object)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonical((v as Record<string, unknown>)[k])}`)
+      .join(',')}}`;
+  return JSON.stringify(v);
+}
+
+/** Every JSON list or object written in a text ("the configurations are [2, [2, \"always\"]]" -> [2, [2, "always"]]). */
+export function jsonLiterals(text: string): unknown[] {
+  const out: unknown[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const open = text[i];
+    if (open !== '[' && open !== '{') continue;
+    let depth = 0;
+    let inStr = false;
+    for (let j = i; j < text.length; j++) {
+      const ch = text[j]!;
+      if (inStr) {
+        if (ch === '\\') j++;
+        else if (ch === '"') inStr = false;
+      } else if (ch === '"') inStr = true;
+      else if (ch === '[' || ch === '{') depth++;
+      else if (ch === ']' || ch === '}') {
+        depth--;
+        if (depth === 0) {
+          try {
+            out.push(JSON.parse(text.slice(i, j + 1)));
+            i = j;
+          } catch {
+            /* not JSON */
+          }
+          break;
+        }
+      }
+    }
+  }
+  return out;
 }
 
 /** Every object key inside a JSON value (args of called_with, expected of equality). */
@@ -952,3 +1063,92 @@ export async function planAssertions(
 }
 
 export type { C3Inputs };
+
+/**
+ * fix-6: object keys in the act (makeBadge({ text: ..., status: ... })) that no step text, the scenario name,
+ * an Examples column, or the documented interface (JSDoc, parameter list) of the function under test names.
+ */
+export function inventedActKeys(code: string, sc: C3ScenarioInput, ctx: PlanContext): string[] {
+  const sf = ts.createSourceFile(
+    'act.js',
+    `(${code}\n);`,
+    ts.ScriptTarget.ES2022,
+    true,
+    ts.ScriptKind.JS,
+  );
+  const keys = new Set<string>();
+  const visit = (n: ts.Node) => {
+    if (ts.isObjectLiteralExpression(n))
+      for (const p of n.properties) {
+        const name =
+          p.name && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name))
+            ? p.name.text
+            : undefined;
+        if (name) keys.add(name);
+      }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  if (!keys.size) return [];
+  const byName = new Map(ctx.exports.map((e) => [e.name, e]));
+  const docs = ctx.targets.map(
+    (t) => `${byName.get(t)?.doc ?? ''} ${(byName.get(t)?.params ?? []).join(' ')}`,
+  );
+  const text = [stepText(sc), sc.scenarioName, sc.featureName, ...ctx.params.keys(), ...docs].join(
+    ' \n ',
+  );
+  return [...keys].filter((k) => !word(k).test(text));
+}
+
+/** fix-6: quoted Given/When values with a backslash that the act writes without doubling it. */
+export function unescapedBackslashValues(sc: C3ScenarioInput, act: string): string[] {
+  const out: string[] = [];
+  for (const st of sc.steps) {
+    if (st.keyword === 'Then') continue;
+    for (const m of st.text.matchAll(/"([^"]*\\[^"]*)"/g)) {
+      const v = m[1]!;
+      if (!act.includes(JSON.stringify(v).slice(1, -1))) out.push(v);
+    }
+  }
+  return [...new Set(out)];
+}
+
+const thenText = (sc: C3ScenarioInput) =>
+  sc.steps
+    .filter((st) => st.keyword === 'Then')
+    .map((st) => st.text)
+    .join(' \n ');
+
+/**
+ * fix-6: an expected text or number that a Given/When step states but no Then step does (and that is not a
+ * <column>, a typeof word, or a value of a Then column). Returns that value, else undefined.
+ */
+export function copiedFromInput(
+  v: unknown,
+  sc: C3ScenarioInput,
+  ctx: PlanContext,
+): string | number | undefined {
+  if (typeof v !== 'string' && typeof v !== 'number') return undefined;
+  if (typeof v === 'string' && (/^<[^<>]+>$/.test(v) || TYPEOF_WORDS.has(v) || !v.trim()))
+    return undefined;
+  const text = String(v);
+  const has = (t: string) =>
+    typeof v === 'number'
+      ? new RegExp(`(?<![\\w.])${text.replace('.', '\\.')}(?![\\w.])`).test(t)
+      : t.toLowerCase().includes(text.toLowerCase());
+  const then = thenText(sc);
+  if (has(then)) return undefined;
+  // a value of an Examples column the Then step uses (<kind> -> "weak")
+  const thenCols = [...then.matchAll(/<([^<>]+)>/g)].map((m) => m[1]!);
+  if (
+    thenCols.some((c) =>
+      (ctx.columnValues.get(c) ?? []).some((x) => x.toLowerCase() === text.toLowerCase()),
+    )
+  )
+    return undefined;
+  const given = sc.steps
+    .filter((st) => st.keyword !== 'Then')
+    .map((st) => st.text)
+    .join(' \n ');
+  return has(given) ? v : undefined;
+}

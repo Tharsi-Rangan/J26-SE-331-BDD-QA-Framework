@@ -1,0 +1,27 @@
+{
+  "contract": "shared.subject-manifest",
+  "schema_version": "1.0.0",
+  "subjects": [
+    {
+      "subject_id": "SUB-ESL273",
+      "project": "eslint",
+      "project_code": "ESL273",
+      "source": {
+        "kind": "bugsjs",
+        "bug_id": "ESLint-273",
+        "buggy_ref": "6eda3b562ac0aa01704e1e9ca1cd25e15d944f16",
+        "fixed_ref": "14c45beb4556a40bcf9b289332c1480f7f4721c4",
+        "repo_path": "subject-src"
+      },
+      "module_path": "lib/config/config-rule.js",
+      "exports": [
+        "generateConfigsFromSchema"
+      ],
+      "module_system": "commonjs",
+      "requirement_ids": [
+        "REQ-ESL273-001"
+      ],
+      "notes": "C3 batch pilot (PP1). Requirements and scenarios hand-written from the project documentation, not from the bug report or fix: JSDoc of generateConfigsFromSchema (\"Generate valid rule configurations based on a schema object\"); docs/user-guide/configuring.md (2 = \"error\"; options array starts with the severity). Run with --subject-root at the buggy_ref."
+    }
+  ]
+}

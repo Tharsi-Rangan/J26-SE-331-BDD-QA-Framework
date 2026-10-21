@@ -1,0 +1,74 @@
+{
+  "contract": "c2.scenario-metadata",
+  "schema_version": "1.0.0",
+  "producer": {
+    "component": "MANUAL_FIXTURE",
+    "tool_version": "fixture"
+  },
+  "run_id": "RUN-FIXTURE-ESL267",
+  "generated_at": "2026-10-21T10:00:00+05:30",
+  "features": [
+    {
+      "feature_file": "c2/features/REQ-ESL267-001.feature",
+      "requirement_id": "REQ-ESL267-001",
+      "feature_name": "Configuration merging",
+      "requirement_text_used": "When a derived configuration is merged over a base configuration, the system shall add the keys that are missing in the base, let the derived values take priority, and, when the derived configuration changes only the severity of an inherited rule, keep the inherited rule options."
+    }
+  ],
+  "scenarios": [
+    {
+      "scenario_id": "SCN-ESL267-001-01",
+      "requirement_id": "REQ-ESL267-001",
+      "feature_file": "c2/features/REQ-ESL267-001.feature",
+      "scenario_name": "Keep rule options when only the severity changes",
+      "scenario_type": "positive",
+      "is_outline": false,
+      "verification": {
+        "syntax": "pass",
+        "requirement_consistency": {
+          "status": "pass"
+        },
+        "ep_coverage": "skipped",
+        "bva_coverage": "skipped",
+        "completeness": "pass",
+        "fully_verified": true
+      }
+    },
+    {
+      "scenario_id": "SCN-ESL267-001-02",
+      "requirement_id": "REQ-ESL267-001",
+      "feature_file": "c2/features/REQ-ESL267-001.feature",
+      "scenario_name": "Add a key that the base does not have",
+      "scenario_type": "positive",
+      "is_outline": false,
+      "verification": {
+        "syntax": "pass",
+        "requirement_consistency": {
+          "status": "pass"
+        },
+        "ep_coverage": "skipped",
+        "bva_coverage": "skipped",
+        "completeness": "pass",
+        "fully_verified": true
+      }
+    },
+    {
+      "scenario_id": "SCN-ESL267-001-03",
+      "requirement_id": "REQ-ESL267-001",
+      "feature_file": "c2/features/REQ-ESL267-001.feature",
+      "scenario_name": "Let the derived value take priority",
+      "scenario_type": "positive",
+      "is_outline": false,
+      "verification": {
+        "syntax": "pass",
+        "requirement_consistency": {
+          "status": "pass"
+        },
+        "ep_coverage": "skipped",
+        "bva_coverage": "skipped",
+        "completeness": "pass",
+        "fully_verified": true
+      }
+    }
+  ]
+}

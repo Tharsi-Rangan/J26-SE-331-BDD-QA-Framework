@@ -578,19 +578,44 @@ function localDeclaration(id: Identifier, sf: SourceFile): Node | undefined {
   return undefined;
 }
 
-/** Name for `module.exports = <value>`: the identifier or function/class name, else 'default'. */
-function moduleExportName(right: Node, value: Node): string {
+/**
+ * Name for `module.exports = <value>`: the identifier or function/class name. A nameless function or class
+ * (`module.exports = function (results) {...}`) is named after its file (`formatters/junit.js` -> `junit`,
+ * `make-badge.js` -> `makeBadge`), because the test needs a variable name for it (`const junit = require(...)`).
+ * Anything else stays 'default'.
+ */
+function moduleExportName(right: Node, value: Node, sf?: SourceFile): string {
   if (Node.isIdentifier(right)) return right.getText();
-  if (
-    (Node.isFunctionDeclaration(value) ||
-      Node.isFunctionExpression(value) ||
-      Node.isClassDeclaration(value) ||
-      Node.isClassExpression(value)) &&
-    value.getName()
-  ) {
-    return value.getName()!;
-  }
+  const fnOrClass =
+    Node.isFunctionDeclaration(value) ||
+    Node.isFunctionExpression(value) ||
+    Node.isArrowFunction(value) ||
+    Node.isClassDeclaration(value) ||
+    Node.isClassExpression(value);
+  if (fnOrClass && !Node.isArrowFunction(value) && value.getName()) return value.getName()!;
+  if (fnOrClass && sf) return nameFromFile(sf.getFilePath());
   return 'default';
+}
+
+const JS_RESERVED = new Set(
+  'break case catch class const continue debugger default delete do else enum export extends false finally for function if import in instanceof new null return super switch this throw true try typeof var void while with yield let static await async'.split(
+    ' ',
+  ),
+);
+
+/** 'lib/formatters/junit.js' -> 'junit', 'lib/make-badge.js' -> 'makeBadge', 'lib/index.js' -> 'lib' (folder). */
+export function nameFromFile(file: string): string {
+  const parts = file.replace(/\\/g, '/').split('/').filter(Boolean);
+  let base = (parts.at(-1) ?? 'module').replace(/\.[^.]+$/, '');
+  if (base === 'index' && parts.length > 1) base = parts.at(-2)!;
+  let name = base
+    .split(/[^A-Za-z0-9_$]+/)
+    .filter(Boolean)
+    .map((w, i) => (i === 0 ? w : w[0]!.toUpperCase() + w.slice(1)))
+    .join('');
+  if (!name) name = 'module';
+  if (/^[0-9]/.test(name)) name = '_' + name;
+  return JS_RESERVED.has(name) ? name + 'Module' : name;
 }
 
 /** C3-08: kind, parameter list and async flag of an exported value. */
@@ -707,7 +732,7 @@ function collectExports(sf: SourceFile, warnings: string[]): ExportEntry[] {
       } else {
         // module.exports = makeBadge -> the test does `const makeBadge = require(...)`
         const value = resolveIdent(right);
-        add(moduleExportName(right, value), value, 'module');
+        add(moduleExportName(right, value, sf), value, 'module');
       }
     }
   }

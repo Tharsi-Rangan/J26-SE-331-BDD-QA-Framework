@@ -270,6 +270,80 @@ When the requirement does not say what shape the result has, C3 takes the shape 
 interface. If there is no documentation either, the answer cannot pass the checks and the scenario is a stub
 with the reason, never a guessed test.
 
+### BugsJS batch: screening all 453 bugs and running C3 on the 10 in scope
+
+`scripts/screen-bugsjs.mjs` reads every BugsJS bug (tags `Bug-N` vs `Bug-N-fix`, code is never run) and asks:
+is the fix in ONE production file, inside an exported function that C3 can call with plain values (no
+request/callback/context/AST input, no `this`, no constructor)? Reviewed exceptions are listed in `MANUAL`.
+
+```
+node scripts/screen-bugsjs.mjs <folder with the 10 BugsJS clones> screen.json docs/bugsjs-screening.csv
+```
+
+Result (21 Oct 2026): **10 of 453 bugs (2.2%)** are in C3's PP1 scope: express-5, shields-4, hexo-7, eslint-22,
+eslint-23, eslint-197, eslint-209, eslint-267, eslint-273, eslint-281. The other 443 need inputs such as rule
+contexts, requests or class instances (PP2: input factories). Full table: `docs/bugsjs-screening.csv`.
+
+`fixtures/bugsjs/<bug>/` holds the C2 input for the 9 new bugs (express-5 is `fixtures/pilot-express-5` in C4).
+Requirements and scenarios are written **from each project's documentation, not from the bug or the fix**; the
+doc source is in each `subject-manifest.json` (`notes`). Every scenario was checked to be true on the fixed version.
+
+One command sets up all bugs (clone, buggy + fixed folders, npm install) and runs `c3 run` + `c3 pilot` on each:
+
+```
+powershell -ExecutionPolicy Bypass -File packages\c3-test-generation\scripts\run-bugsjs.ps1
+```
+
+Options: `-Subjects C:\c3-subjects`, `-Only eslint-22,hexo-7`, `-SkipSetup`, `-Cache readonly` (replay). The
+summary table is printed and written to `runs\bugsjs-summary.md`.
+
+Fix-6, from the first real Qwen run on the batch (21 Oct: 33 tests, 1 bug detected (eslint-22), 9 false alarms).
+Every cause is a general rule with a unit test that replays Qwen's real answer (`test/pilot-fixes-6.test.ts`);
+the prompt did not change (still 0.6.0), only the checks, retry messages and defaults:
+
+| Cause in the batch run | Fix |
+|---|---|
+| A list or object written as JSON text: `toBe("[\"warn\", \"allow-null\"]")` (eslint-267, eslint-281) | JSON text that a step states becomes that list/object (`toEqual` / `toMatchObject`); keys a Then step writes out count as named |
+| `result.length` 2 for "Then the configurations are [2]" (eslint-273) | Rule 12: a Then step that writes a JSON value is checked against that whole value |
+| Invented input field: `makeBadge({ text: "build", status: "passed" })` (shields-4) | Object keys in the call must be named by a step, the scenario or the documented interface (`inventedActKeys`) |
+| HTML `<p>` inside a string read as a Gherkin `<placeholder>` (hexo-7, 2 stubs) | Inside strings only a whole `"<column>"` of a real column is a placeholder |
+| The Given input copied as the expected output (hexo-7 retry) | An expected text/number must be stated by a Then step, not only by a Given/When step (`copiedFromInput`) |
+| `"src\app.js"` in JavaScript is `srcapp.js` (eslint-23) | A step value with a backslash must be written doubled; the doubled form counts as used (rule 7) |
+| `process.cwd()` mocked as `returns_input` with an object (eslint-23) | Mock values must fit the result type (`cwd()` takes no input and returns a string); typed rule defaults (`'/project'`) |
+
+Fix-7, from batch run 2 (32 tests, 1 bug detected, 1 false alarm): hexo-7 expected `"<h1>Intro</h1>"`, which no step
+states. Strings with `<...>` were skipped by the "value must be stated" check as if they were `<column>` templates;
+now only real Examples columns make a template, and HTML text must be stated like any other string (rules 1, 10).
+
+Found while preparing the batch: a nameless `module.exports = function (...)` (ESLint's `lib/formatters/junit.js`)
+was scanned as `default`, which is not a valid variable name in a test. It is now named after its file
+(`junit.js` -> `junit`, `make-badge.js` -> `makeBadge`, see `nameFromFile`).
+
+### HTML report (C3-16)
+
+`c3 run` and `c3 pilot` also write **`<run>/c3/c3_report.html`**: one page that shows what every C3 step did for
+that run, in simple words (for demos and reviews). It only reads the files above; it never changes them. One
+self-contained file (no internet), every text from the inputs or the model is HTML-escaped.
+
+```
+pnpm c3 report --run runs/<RUN-ID> [--open]                 # (re)write one run page
+pnpm c3 report --index runs [--runs a,b] [--open]           # every run page + runs/c3_batch_report.html
+pnpm c3 run ... --open        pnpm c3 pilot ... --open      # open the page in the browser at the end
+powershell -ExecutionPolicy Bypass -File packages\c3-test-generation\scripts\run-bugsjs.ps1 -SkipSetup -Open
+```
+
+The run page has: the requirement, summary cards (scenarios, runnable, stubs, tests, bug detected, false alarms),
+a clickable pipeline (C3-03 .. C3-14), a table "what each step did" with its output file and the C3 source file
+of its rules, and one section per scenario (bug detected first): Gherkin steps and Examples, code under test,
+mock decisions with rule and reason, the typed assertions (or why they were refused), strategy, the generated
+Jest code or stub, the 4 checks with `0.5 x agreement + 0.5 x grounding`, repair rounds, the confidence sum
+(signal x weight vs 0.8) and the buggy / fixed outcome.
+
+Blue links open the file in VS Code at the line (`vscode://file/<absolute path>:<line>`): the `.feature` file at
+the scenario, the buggy and fixed module at the export, the generated test at the scenario's block, the output
+JSON, and C3's own rule files (`src/mock/rules.ts` at `R-07`, `src/route/confidence.ts` at the weights, ...).
+`c3 pilot` now records the buggy and fixed folders in `pilot_results.json` (`roots`) for these links.
+
 ### Model client (C3-06)
 
 All model calls go through one `ModelClient` (`src/model/`). Settings come only from `.env`
