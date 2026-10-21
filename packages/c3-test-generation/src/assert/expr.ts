@@ -86,9 +86,30 @@ export function replacePlaceholders(
     used.set(col, { param: p, quoted: prev ? prev.quoted && quoted : quoted });
     return p;
   };
-  const code = text
-    .replace(/(["'`])<([^<>"'`]+)>\1/g, (whole, _q, col: string) => swap(col, true, whole))
-    .replace(/<([A-Za-z_][^<>"'`\n]*?)>/g, (whole, col: string) => swap(col, false, whole));
+  // Inside a string literal only a whole "<column>" of a real Examples column is a placeholder; any other <...>
+  // there is text (HTML such as "<p>No headings</p>", C3 batch hexo-7). Outside strings every <name> is one.
+  let code = '';
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i]!;
+    if (ch === '"' || ch === "'" || ch === '`') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== ch) j += text[j] === '\\' ? 2 : 1;
+      const lit = text.slice(i, j + 1);
+      const inner = /^<([^<>"'`]+)>$/.exec(lit.slice(1, -1));
+      code += inner && params.has(inner[1]!) ? swap(inner[1]!, true, lit) : lit;
+      i = j + 1;
+      continue;
+    }
+    const m = /^<([A-Za-z_][^<>"'`\n]*?)>/.exec(text.slice(i));
+    if (m) {
+      code += swap(m[1]!, false, m[0]);
+      i += m[0].length;
+      continue;
+    }
+    code += ch;
+    i++;
+  }
   return { code, used, unknown };
 }
 
@@ -191,15 +212,13 @@ export function renderValue(
       return JSON.stringify(v);
     }
     if (/<[^<>]+>/.test(v)) {
+      // A <name> inside a longer string is a placeholder only for a real column; other <...> is text (HTML).
       let any = false;
       const body = v
         .replace(/[`\\$]/g, (c) => `\\${c}`)
         .replace(/<([^<>]+)>/g, (m, col: string) => {
           const p = params.get(col);
-          if (!p) {
-            unknown.push(col);
-            return m;
-          }
+          if (!p) return m;
           any = true;
           return `\${${p}}`;
         });

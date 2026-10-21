@@ -297,6 +297,20 @@ powershell -ExecutionPolicy Bypass -File packages\c3-test-generation\scripts\run
 Options: `-Subjects C:\c3-subjects`, `-Only eslint-22,hexo-7`, `-SkipSetup`, `-Cache readonly` (replay). The
 summary table is printed and written to `runs\bugsjs-summary.md`.
 
+Fix-6, from the first real Qwen run on the batch (21 Oct: 33 tests, 1 bug detected (eslint-22), 9 false alarms).
+Every cause is a general rule with a unit test that replays Qwen's real answer (`test/pilot-fixes-6.test.ts`);
+the prompt did not change (still 0.6.0), only the checks, retry messages and defaults:
+
+| Cause in the batch run | Fix |
+|---|---|
+| A list or object written as JSON text: `toBe("[\"warn\", \"allow-null\"]")` (eslint-267, eslint-281) | JSON text that a step states becomes that list/object (`toEqual` / `toMatchObject`); keys a Then step writes out count as named |
+| `result.length` 2 for "Then the configurations are [2]" (eslint-273) | Rule 12: a Then step that writes a JSON value is checked against that whole value |
+| Invented input field: `makeBadge({ text: "build", status: "passed" })` (shields-4) | Object keys in the call must be named by a step, the scenario or the documented interface (`inventedActKeys`) |
+| HTML `<p>` inside a string read as a Gherkin `<placeholder>` (hexo-7, 2 stubs) | Inside strings only a whole `"<column>"` of a real column is a placeholder |
+| The Given input copied as the expected output (hexo-7 retry) | An expected text/number must be stated by a Then step, not only by a Given/When step (`copiedFromInput`) |
+| `"src\app.js"` in JavaScript is `srcapp.js` (eslint-23) | A step value with a backslash must be written doubled; the doubled form counts as used (rule 7) |
+| `process.cwd()` mocked as `returns_input` with an object (eslint-23) | Mock values must fit the result type (`cwd()` takes no input and returns a string); typed rule defaults (`'/project'`) |
+
 Found while preparing the batch: a nameless `module.exports = function (...)` (ESLint's `lib/formatters/junit.js`)
 was scanned as `default`, which is not a valid variable name in a test. It is now named after its file
 (`junit.js` -> `junit`, `make-badge.js` -> `makeBadge`, see `nameFromFile`).

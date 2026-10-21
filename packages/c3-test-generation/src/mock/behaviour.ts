@@ -212,6 +212,22 @@ export function checkAnswer(
       `the function uses what ${d.dependency.symbol}() returns, so "value" must not be null (use returns_input or a value the steps imply)`,
     );
   }
+  // C3-14 batch (fix-6): the value must fit what the dependency returns. process.cwd() takes no input and returns
+  // a string; returns_input with {"cwd": ...} made path.resolve() throw on correct code (eslint-23).
+  const want = returnTypeOf(d);
+  if (kind === 'returns_input' && takesNoInput(d)) {
+    problems.push(
+      `${d.dependency.symbol}() takes no input, so returns_input cannot work; use returns with a ${want ?? 'value'}`,
+    );
+  }
+  if (
+    (kind === 'returns' || kind === 'resolves') &&
+    want &&
+    raw.value != null &&
+    typeof raw.value !== want
+  ) {
+    problems.push(`"value" must be a ${want}: ${d.dependency.symbol}() returns a ${want}`);
+  }
   if ((kind === 'resolves' || kind === 'rejects') && d.dependency.type_signature && !isAsync(d)) {
     problems.push(
       `kind ${kind} needs a Promise, but the signature is ${d.dependency.type_signature}`,
@@ -398,6 +414,12 @@ export async function deriveMockBehaviours(
 
 /** Rule-default behaviour as structured data (matches the default summary written by C3-05). */
 export function defaultStructured(d: MockDecision): StructuredBehaviour {
+  // fix-6: a dependency with a known primitive result gets a value of that type, never null
+  // (process.cwd() -> '/project', so path.resolve() keeps working).
+  const key = depKey(d);
+  if (key in KNOWN_DEFAULTS) return { kind: 'returns', value: KNOWN_DEFAULTS[key] };
+  const want = returnTypeOf(d);
+  const typed = want === 'string' ? '' : want === 'number' ? 0 : want === 'boolean' ? false : null;
   switch (d.dependency.side_effect) {
     case 'database':
       return isAsync(d) ? { kind: 'returns_input', async: true } : { kind: 'returns_input' };
@@ -407,9 +429,9 @@ export function defaultStructured(d: MockDecision): StructuredBehaviour {
       return { kind: 'returns', value: 1760000000000 };
     case 'network':
     case 'io':
-      return { kind: isAsync(d) ? 'resolves' : 'returns', value: null };
+      return { kind: isAsync(d) ? 'resolves' : 'returns', value: typed };
     default:
-      return { kind: 'returns', value: null };
+      return { kind: 'returns', value: typed };
   }
 }
 
@@ -455,4 +477,45 @@ export function behaviourToJest(target: string, b: StructuredBehaviour): string 
     case 'rejects':
       return `${target}.mockRejectedValue(${err(b.error_message)});`;
   }
+}
+
+const depKey = (d: MockDecision) =>
+  `${d.dependency.import_specifier.replace(/^node:/, '')}#${d.dependency.symbol}`;
+
+/** Globals and built-ins whose result type is fixed (they have no type signature in the scan). */
+const KNOWN_RETURNS: Record<string, 'string' | 'number' | 'boolean'> = {
+  'process#cwd': 'string',
+  'process#uptime': 'number',
+  'Date#now': 'number',
+  'Math#random': 'number',
+  'os#hostname': 'string',
+  'os#platform': 'string',
+  'os#homedir': 'string',
+  'os#tmpdir': 'string',
+};
+const NO_INPUT = new Set([
+  'process#cwd',
+  'process#uptime',
+  'Date#now',
+  'Math#random',
+  'os#hostname',
+  'os#platform',
+  'os#homedir',
+  'os#tmpdir',
+]);
+const KNOWN_DEFAULTS: Record<string, unknown> = { 'process#cwd': '/project' };
+
+/** 'string' | 'number' | 'boolean' when the dependency is known to return that type (also through a Promise). */
+export function returnTypeOf(d: MockDecision): 'string' | 'number' | 'boolean' | undefined {
+  const known = KNOWN_RETURNS[depKey(d)];
+  if (known) return known;
+  const m = /=>\s*(?:Promise<\s*)?(string|number|boolean)\s*>?\s*$/.exec(
+    d.dependency.type_signature ?? '',
+  );
+  return m ? (m[1] as 'string' | 'number' | 'boolean') : undefined;
+}
+
+/** True when the dependency is called without arguments (process.cwd(), Date.now(), a `() => ...` signature). */
+export function takesNoInput(d: MockDecision): boolean {
+  return NO_INPUT.has(depKey(d)) || /^\s*\(\s*\)\s*=>/.test(d.dependency.type_signature ?? '');
 }
