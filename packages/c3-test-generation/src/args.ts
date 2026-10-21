@@ -9,6 +9,8 @@ export interface RunOptions {
   subjectRoot?: string;
   /** --no-model: never call a model; rule defaults are used (also the default when .env has no model). */
   noModel?: boolean;
+  /** --open: open the HTML report (c3/c3_report.html) in the browser at the end (C3-16). */
+  open?: boolean;
 }
 
 /**
@@ -25,6 +27,7 @@ export function parseRunArgs(argv: string[], baseDir = callerDir()): RunOptions 
       srs: { type: 'string' },
       'subject-root': { type: 'string' },
       'no-model': { type: 'boolean' },
+      open: { type: 'boolean' },
     },
   });
   if (positionals[0] !== 'run') {
@@ -40,6 +43,7 @@ export function parseRunArgs(argv: string[], baseDir = callerDir()): RunOptions 
     srs: abs(values.srs),
     subjectRoot: abs(values['subject-root']),
     ...(values['no-model'] ? { noModel: true } : {}),
+    ...(values.open ? { open: true } : {}),
   };
 }
 
@@ -88,6 +92,7 @@ export interface PilotCommandOptions {
   buggy: string;
   fixed: string;
   label?: string;
+  open?: boolean;
 }
 
 /** Parse `c3 pilot --run runs/<RUN-ID> --buggy <subject root> --fixed <subject root> [--label Express-5]`. */
@@ -100,11 +105,12 @@ export function parsePilotArgs(argv: string[], baseDir = callerDir()): PilotComm
       buggy: { type: 'string' },
       fixed: { type: 'string' },
       label: { type: 'string' },
+      open: { type: 'boolean' },
     },
   });
   if (positionals[0] !== 'pilot' || !values.run || !values.buggy || !values.fixed) {
     throw new Error(
-      'Usage: c3 pilot --run runs/<RUN-ID> --buggy <subject root> --fixed <subject root> [--label <name>]',
+      'Usage: c3 pilot --run runs/<RUN-ID> --buggy <subject root> --fixed <subject root> [--label <name>] [--open]',
     );
   }
   return {
@@ -112,6 +118,50 @@ export function parsePilotArgs(argv: string[], baseDir = callerDir()): PilotComm
     buggy: path.resolve(baseDir, values.buggy),
     fixed: path.resolve(baseDir, values.fixed),
     ...(values.label ? { label: values.label } : {}),
+    ...(values.open ? { open: true } : {}),
+  };
+}
+
+/** Options for `c3 report` (C3-16). */
+export interface ReportCommandOptions {
+  /** One run folder: write <run>/c3/c3_report.html. */
+  run?: string;
+  /** A folder of runs: write every run page and <dir>/c3_batch_report.html. */
+  index?: string;
+  /** --runs a,b: only these run folders (names inside --index), in this order. */
+  runs?: string[];
+  title?: string;
+  open?: boolean;
+}
+
+/** Parse `c3 report --run runs/<RUN-ID> [--open]` or `c3 report --index runs [--runs a,b] [--open]`. */
+export function parseReportArgs(argv: string[], baseDir = callerDir()): ReportCommandOptions {
+  const { positionals, values } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: {
+      run: { type: 'string' },
+      index: { type: 'string' },
+      runs: { type: 'string' },
+      title: { type: 'string' },
+      open: { type: 'boolean' },
+    },
+  });
+  if (positionals[0] !== 'report' || !values.run === !values.index) {
+    throw new Error(
+      'Usage: c3 report --run runs/<RUN-ID> [--open]   or   c3 report --index runs [--runs a,b] [--title <text>] [--open]',
+    );
+  }
+  const runs = values.runs
+    ?.split(',')
+    .map((r) => r.trim())
+    .filter(Boolean);
+  return {
+    ...(values.run ? { run: path.resolve(baseDir, values.run) } : {}),
+    ...(values.index ? { index: path.resolve(baseDir, values.index) } : {}),
+    ...(runs?.length ? { runs } : {}),
+    ...(values.title ? { title: values.title } : {}),
+    ...(values.open ? { open: true } : {}),
   };
 }
 

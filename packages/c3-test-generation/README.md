@@ -319,6 +319,31 @@ Found while preparing the batch: a nameless `module.exports = function (...)` (E
 was scanned as `default`, which is not a valid variable name in a test. It is now named after its file
 (`junit.js` -> `junit`, `make-badge.js` -> `makeBadge`, see `nameFromFile`).
 
+### HTML report (C3-16)
+
+`c3 run` and `c3 pilot` also write **`<run>/c3/c3_report.html`**: one page that shows what every C3 step did for
+that run, in simple words (for demos and reviews). It only reads the files above; it never changes them. One
+self-contained file (no internet), every text from the inputs or the model is HTML-escaped.
+
+```
+pnpm c3 report --run runs/<RUN-ID> [--open]                 # (re)write one run page
+pnpm c3 report --index runs [--runs a,b] [--open]           # every run page + runs/c3_batch_report.html
+pnpm c3 run ... --open        pnpm c3 pilot ... --open      # open the page in the browser at the end
+powershell -ExecutionPolicy Bypass -File packages\c3-test-generation\scripts\run-bugsjs.ps1 -SkipSetup -Open
+```
+
+The run page has: the requirement, summary cards (scenarios, runnable, stubs, tests, bug detected, false alarms),
+a clickable pipeline (C3-03 .. C3-14), a table "what each step did" with its output file and the C3 source file
+of its rules, and one section per scenario (bug detected first): Gherkin steps and Examples, code under test,
+mock decisions with rule and reason, the typed assertions (or why they were refused), strategy, the generated
+Jest code or stub, the 4 checks with `0.5 x agreement + 0.5 x grounding`, repair rounds, the confidence sum
+(signal x weight vs 0.8) and the buggy / fixed outcome.
+
+Blue links open the file in VS Code at the line (`vscode://file/<absolute path>:<line>`): the `.feature` file at
+the scenario, the buggy and fixed module at the export, the generated test at the scenario's block, the output
+JSON, and C3's own rule files (`src/mock/rules.ts` at `R-07`, `src/route/confidence.ts` at the weights, ...).
+`c3 pilot` now records the buggy and fixed folders in `pilot_results.json` (`roots`) for these links.
+
 ### Model client (C3-06)
 
 All model calls go through one `ModelClient` (`src/model/`). Settings come only from `.env`

@@ -6,14 +6,17 @@
 #   -Only eslint-22,hexo-7     run only these bugs
 #   -SkipSetup                 do not clone / install again (folders already there)
 #   -Cache readwrite           LLM_CACHE for this run: readwrite (first real run) or readonly (replay, offline)
+#   -Open                      open the HTML batch report (runs\c3_batch_report.html) in the browser at the end
 # For each bug: clone github.com/BugsJS/<project> once, add a buggy and a fixed folder at the refs in the
 # fixture's subject-manifest.json, npm install, copy the fixture to runs\bugsjs-<bug>, c3 run on the buggy
-# version, c3 pilot on buggy vs fixed. At the end: one summary table (also written to runs\bugsjs-summary.md).
+# version, c3 pilot on buggy vs fixed. At the end: one summary table (also written to runs\bugsjs-summary.md)
+# and the HTML report (C3-16): runs\c3_batch_report.html with a link to each bug's runs\<run>\c3\c3_report.html.
 param(
   [string]$Subjects = 'C:\c3-subjects',
   [string[]]$Only = @(),
   [switch]$SkipSetup,
-  [ValidateSet('readwrite', 'readonly', 'off')][string]$Cache = 'readwrite'
+  [ValidateSet('readwrite', 'readonly', 'off')][string]$Cache = 'readwrite',
+  [switch]$Open
 )
 $ErrorActionPreference = 'Stop'
 $repo = (Get-Location).Path
@@ -85,3 +88,14 @@ $md += $summary | ForEach-Object { "| $($_.Bug) | $($_.Scenarios) | $($_.Runnabl
 $mdFile = Join-Path $runs 'bugsjs-summary.md'
 $md | Set-Content -Encoding utf8 $mdFile
 Write-Host "Summary written to $mdFile"
+
+# C3-16: HTML batch report + one page per run (read-only; it only reads the files written above).
+# It lists every BugsJS fixture that has a finished run (also when -Only ran just a few), Express-5 first.
+$reportRuns = @(Get-ChildItem $fixtures -Directory | Sort-Object Name | ForEach-Object { "bugsjs-$($_.Name)" } |
+  Where-Object { Test-Path (Join-Path $runs (Join-Path $_ (Join-Path 'c3' 'generation_confidence_report.json'))) })
+if (Test-Path $e5) { $reportRuns = @('express5-pilot-run4') + $reportRuns }
+if ($reportRuns.Count) {
+  $reportArgs = @('c3', 'report', '--index', 'runs', '--runs', ($reportRuns -join ','))
+  if ($Open) { $reportArgs += '--open' }
+  pnpm @reportArgs
+}
