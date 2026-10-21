@@ -270,6 +270,37 @@ When the requirement does not say what shape the result has, C3 takes the shape 
 interface. If there is no documentation either, the answer cannot pass the checks and the scenario is a stub
 with the reason, never a guessed test.
 
+### BugsJS batch: screening all 453 bugs and running C3 on the 10 in scope
+
+`scripts/screen-bugsjs.mjs` reads every BugsJS bug (tags `Bug-N` vs `Bug-N-fix`, code is never run) and asks:
+is the fix in ONE production file, inside an exported function that C3 can call with plain values (no
+request/callback/context/AST input, no `this`, no constructor)? Reviewed exceptions are listed in `MANUAL`.
+
+```
+node scripts/screen-bugsjs.mjs <folder with the 10 BugsJS clones> screen.json docs/bugsjs-screening.csv
+```
+
+Result (21 Oct 2026): **10 of 453 bugs (2.2%)** are in C3's PP1 scope: express-5, shields-4, hexo-7, eslint-22,
+eslint-23, eslint-197, eslint-209, eslint-267, eslint-273, eslint-281. The other 443 need inputs such as rule
+contexts, requests or class instances (PP2: input factories). Full table: `docs/bugsjs-screening.csv`.
+
+`fixtures/bugsjs/<bug>/` holds the C2 input for the 9 new bugs (express-5 is `fixtures/pilot-express-5` in C4).
+Requirements and scenarios are written **from each project's documentation, not from the bug or the fix**; the
+doc source is in each `subject-manifest.json` (`notes`). Every scenario was checked to be true on the fixed version.
+
+One command sets up all bugs (clone, buggy + fixed folders, npm install) and runs `c3 run` + `c3 pilot` on each:
+
+```
+powershell -ExecutionPolicy Bypass -File packages\c3-test-generation\scripts\run-bugsjs.ps1
+```
+
+Options: `-Subjects C:\c3-subjects`, `-Only eslint-22,hexo-7`, `-SkipSetup`, `-Cache readonly` (replay). The
+summary table is printed and written to `runs\bugsjs-summary.md`.
+
+Found while preparing the batch: a nameless `module.exports = function (...)` (ESLint's `lib/formatters/junit.js`)
+was scanned as `default`, which is not a valid variable name in a test. It is now named after its file
+(`junit.js` -> `junit`, `make-badge.js` -> `makeBadge`, see `nameFromFile`).
+
 ### Model client (C3-06)
 
 All model calls go through one `ModelClient` (`src/model/`). Settings come only from `.env`

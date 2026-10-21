@@ -1,0 +1,56 @@
+{
+  "contract": "c2.scenario-metadata",
+  "schema_version": "1.0.0",
+  "producer": {
+    "component": "MANUAL_FIXTURE",
+    "tool_version": "fixture"
+  },
+  "run_id": "RUN-FIXTURE-ESL197",
+  "generated_at": "2026-10-21T10:00:00+05:30",
+  "features": [
+    {
+      "feature_file": "c2/features/REQ-ESL197-001.feature",
+      "requirement_id": "REQ-ESL197-001",
+      "feature_name": "JUnit report",
+      "requirement_text_used": "The junit formatter shall turn the lint results (one result per linted file, each with its messages) into a JUnit XML report, returned as text, with one testsuite per linted file."
+    }
+  ],
+  "scenarios": [
+    {
+      "scenario_id": "SCN-ESL197-001-01",
+      "requirement_id": "REQ-ESL197-001",
+      "feature_file": "c2/features/REQ-ESL197-001.feature",
+      "scenario_name": "Report a file with one problem",
+      "scenario_type": "positive",
+      "is_outline": false,
+      "verification": {
+        "syntax": "pass",
+        "requirement_consistency": {
+          "status": "pass"
+        },
+        "ep_coverage": "skipped",
+        "bva_coverage": "skipped",
+        "completeness": "pass",
+        "fully_verified": true
+      }
+    },
+    {
+      "scenario_id": "SCN-ESL197-001-02",
+      "requirement_id": "REQ-ESL197-001",
+      "feature_file": "c2/features/REQ-ESL197-001.feature",
+      "scenario_name": "Report a file without problems",
+      "scenario_type": "edge",
+      "is_outline": false,
+      "verification": {
+        "syntax": "pass",
+        "requirement_consistency": {
+          "status": "pass"
+        },
+        "ep_coverage": "skipped",
+        "bva_coverage": "skipped",
+        "completeness": "pass",
+        "fully_verified": true
+      }
+    }
+  ]
+}

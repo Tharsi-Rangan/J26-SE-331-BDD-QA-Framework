@@ -1,0 +1,27 @@
+{
+  "contract": "shared.subject-manifest",
+  "schema_version": "1.0.0",
+  "subjects": [
+    {
+      "subject_id": "SUB-SHLD4",
+      "project": "shields",
+      "project_code": "SHLD4",
+      "source": {
+        "kind": "bugsjs",
+        "bug_id": "Shields-4",
+        "buggy_ref": "e588bef199aa34be8e858029a63e46a2fd82f73e",
+        "fixed_ref": "c6dc6151a5e2c9fc3e1a32094687f99103a83f6d",
+        "repo_path": "subject-src"
+      },
+      "module_path": "lib/make-badge.js",
+      "exports": [
+        "makeBadge"
+      ],
+      "module_system": "commonjs",
+      "requirement_ids": [
+        "REQ-SHLD4-001"
+      ],
+      "notes": "C3 batch pilot (PP1). Requirements and scenarios hand-written from the project documentation, not from the bug report or fix: doc/gh-badges.md \"Format\" (text: textual information shown, in order; colorscheme; template from templates/) and README \"badge library\" example. Run with --subject-root at the buggy_ref."
+    }
+  ]
+}

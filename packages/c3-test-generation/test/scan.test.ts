@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
-import { classifySpecifier, scanModule } from '../src/scan/scanner.js';
+import { classifySpecifier, nameFromFile, scanModule } from '../src/scan/scanner.js';
 import type { ModuleScan } from '../src/scan/types.js';
 
 const GOLDEN_SUBJECT = fileURLToPath(
@@ -144,6 +144,22 @@ describe('C3-04 scanModule export styles and problems', () => {
     ]);
     expect(reach(scan, 'makeBadge')).toEqual(['./does-not-exist#suffix', 'util#format']);
     expect(scan.warnings).toEqual(["line 2: cannot resolve internal module './does-not-exist'"]);
+  });
+
+  test('a nameless module.exports = function is named after its file (BugsJS eslint-197)', () => {
+    const scan = scanModule(SUBJECT, 'lib/formatters/junit-like.js');
+    expect(scan.exports.map((e) => [e.name, e.style, e.params])).toEqual([
+      ['junitLike', 'module', ['results']],
+    ]);
+    expect(reach(scan, 'junitLike')).toEqual(['util#format']);
+  });
+
+  test('nameFromFile gives a valid variable name', () => {
+    expect(nameFromFile('lib/formatters/junit.js')).toBe('junit');
+    expect(nameFromFile('lib/make-badge.js')).toBe('makeBadge');
+    expect(nameFromFile('C:\\x\\lib\\index.js')).toBe('lib');
+    expect(nameFromFile('lib/2fa.js')).toBe('_2fa');
+    expect(nameFromFile('lib/default.js')).toBe('defaultModule');
   });
 
   test('ES modules: default, namespace and renamed imports', () => {

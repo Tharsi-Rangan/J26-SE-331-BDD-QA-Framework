@@ -1,0 +1,126 @@
+{
+  "contract": "c2.scenario-metadata",
+  "schema_version": "1.0.0",
+  "producer": {
+    "component": "MANUAL_FIXTURE",
+    "tool_version": "fixture"
+  },
+  "run_id": "RUN-FIXTURE-ESL22",
+  "generated_at": "2026-10-21T10:00:00+05:30",
+  "features": [
+    {
+      "feature_file": "c2/features/REQ-ESL22-001.feature",
+      "requirement_id": "REQ-ESL22-001",
+      "feature_name": "Rule severity validation",
+      "requirement_text_used": "The system shall accept a rule severity of \"off\" or 0, \"warn\" or 1, and \"error\" or 2, given alone or as the first item of an options array, and shall reject any other severity with an Error. The first item of an options array is always the rule severity, a number or a string."
+    }
+  ],
+  "scenarios": [
+    {
+      "scenario_id": "SCN-ESL22-001-01",
+      "requirement_id": "REQ-ESL22-001",
+      "feature_file": "c2/features/REQ-ESL22-001.feature",
+      "scenario_name": "Accept a valid rule severity",
+      "scenario_type": "positive",
+      "is_outline": true,
+      "verification": {
+        "syntax": "pass",
+        "requirement_consistency": {
+          "status": "pass"
+        },
+        "ep_coverage": "skipped",
+        "bva_coverage": "skipped",
+        "completeness": "pass",
+        "fully_verified": true
+      },
+      "examples": [
+        {
+          "row_index": 1,
+          "values": {
+            "setting": "off"
+          }
+        },
+        {
+          "row_index": 2,
+          "values": {
+            "setting": "warn"
+          }
+        },
+        {
+          "row_index": 3,
+          "values": {
+            "setting": "error"
+          }
+        },
+        {
+          "row_index": 4,
+          "values": {
+            "setting": 0
+          }
+        },
+        {
+          "row_index": 5,
+          "values": {
+            "setting": 1
+          }
+        },
+        {
+          "row_index": 6,
+          "values": {
+            "setting": 2
+          }
+        }
+      ]
+    },
+    {
+      "scenario_id": "SCN-ESL22-001-02",
+      "requirement_id": "REQ-ESL22-001",
+      "feature_file": "c2/features/REQ-ESL22-001.feature",
+      "scenario_name": "Reject a severity that is not allowed",
+      "scenario_type": "negative",
+      "is_outline": true,
+      "verification": {
+        "syntax": "pass",
+        "requirement_consistency": {
+          "status": "pass"
+        },
+        "ep_coverage": "skipped",
+        "bva_coverage": "skipped",
+        "completeness": "pass",
+        "fully_verified": true
+      },
+      "examples": [
+        {
+          "row_index": 1,
+          "values": {
+            "setting": "warning"
+          }
+        },
+        {
+          "row_index": 2,
+          "values": {
+            "setting": 3
+          }
+        }
+      ]
+    },
+    {
+      "scenario_id": "SCN-ESL22-001-03",
+      "requirement_id": "REQ-ESL22-001",
+      "feature_file": "c2/features/REQ-ESL22-001.feature",
+      "scenario_name": "Reject a list given as the severity",
+      "scenario_type": "negative",
+      "is_outline": false,
+      "verification": {
+        "syntax": "pass",
+        "requirement_consistency": {
+          "status": "pass"
+        },
+        "ep_coverage": "skipped",
+        "bva_coverage": "skipped",
+        "completeness": "pass",
+        "fully_verified": true
+      }
+    }
+  ]
+}

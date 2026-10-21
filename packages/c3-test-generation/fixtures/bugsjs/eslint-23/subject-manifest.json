@@ -1,0 +1,27 @@
+{
+  "contract": "shared.subject-manifest",
+  "schema_version": "1.0.0",
+  "subjects": [
+    {
+      "subject_id": "SUB-ESL23",
+      "project": "eslint",
+      "project_code": "ESL23",
+      "source": {
+        "kind": "bugsjs",
+        "bug_id": "ESLint-23",
+        "buggy_ref": "27616a81ff0636f94e2ea15c977b56e7c7e23a19",
+        "fixed_ref": "b7e64a9e1b6ce2994a3fe00cc36257c2f5d229b6",
+        "repo_path": "subject-src"
+      },
+      "module_path": "lib/util/glob-util.js",
+      "exports": [
+        "resolveFileGlobPatterns"
+      ],
+      "module_system": "commonjs",
+      "requirement_ids": [
+        "REQ-ESL23-001"
+      ],
+      "notes": "C3 batch pilot (PP1). Requirements and scenarios hand-written from the project documentation, not from the bug report or fix: JSDoc of resolveFileGlobPatterns and processPath in lib/util/glob-util.js (\"the path itself otherwise\"; \"Also makes sure all path separators are POSIX style\"); docs/user-guide/command-line-interface.md (--ext, default .js). Run with --subject-root at the buggy_ref."
+    }
+  ]
+}
