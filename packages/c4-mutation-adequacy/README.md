@@ -38,6 +38,7 @@ Copy `.env.example` to `.env` for model settings. Never commit `.env`.
 | C4-08 | Blind ground truth for the Express-5 pilot survivors: `docs/annotation/express-5/ground-truth.json`. Guideline: `docs/trace-annotation-guideline.md` |
 | C4-09 | Gap classifier: each survivor gets a gap type, evidence and an explanation (`src/gap.ts`) |
 | C4-10 | Ranked recommendations, routed to C1, C2 or C3 (`src/recommend.ts`) |
+| C4-11 | HTML view: `c4 run` also writes `c4/adequacy_report.html` (`src/html.ts`). Screenshot: `docs/c4-11-html-express-5.png` |
 | C4-12 | Trace accuracy against the ground truth (`src/accuracy.ts`, `scripts/trace-accuracy.ts`) and one before/after run: `docs/c4-12-results.md` |
 
 On the golden example, `c4 run` gives 14 mutants, 13 killed, 1 survived (mutant 12), score 0.9286.
@@ -94,6 +95,12 @@ npx tsx scripts/trace-accuracy.ts <out>/c4/adequacy_report.json docs/annotation/
 `fixtures/pilot-express-5-rec-001` is the pilot with REC-001 applied: 1 new scenario and 1 new test.
 The mutation score goes from 0.5766 to 0.6569 (+0.0803). REC-001 predicted +0.0365.
 Details: `docs/c4-12-results.md`.
+
+## HTML view (C4-11)
+
+`c4 run` writes `c4/adequacy_report.html` next to the JSON report. The page is one file with no scripts and no external files.
+It shows the summary, the requirement scores, the ranked recommendations and every survivor with its trace and gap.
+To write the page again from a JSON report: `npx tsx scripts/render-html.ts <out>/c4/adequacy_report.json`.
 
 ## Equivalent-mutant rules
 
@@ -160,4 +167,3 @@ C4 groups the survivors that have a gap by gap type, route and scenario. Each gr
 ## Next Planner tasks
 
 - C4-07 comparison table: run all 3 modes on the pilots with Ollama running
-- C4-11 HTML view of the adequacy report
