@@ -4,6 +4,7 @@ import type { RunOptions } from './args.js';
 import { embedderFromEnv } from './embedding.js';
 import { findEquivalentMutants } from './equivalent.js';
 import { classifyGaps } from './gap.js';
+import { writeHtml } from './html.js';
 import { loadInputs, loadMockDecisions, loadScenarioMetadata } from './loader.js';
 import { buildReport, writeReport, type AdequacyReport } from './report.js';
 import { aggregateScores, type Scores } from './scores.js';
@@ -14,6 +15,7 @@ import { buildSurvivors, testsByStrykerId, unmatchedTestNames, type Survivor } f
 export type { RunOptions } from './args.js';
 export { findEquivalentMutants } from './equivalent.js';
 export { classifyGap, classifyGaps } from './gap.js';
+export { renderHtml, writeHtml } from './html.js';
 export { buildRecommendations, routeFor } from './recommend.js';
 export { loadInputs, loadMockDecisions, loadScenarioMetadata } from './loader.js';
 export { buildReport, writeReport } from './report.js';
@@ -25,7 +27,7 @@ export { buildSurvivors, testsByStrykerId, traceMutant } from './trace.js';
 /**
  * Requirement-Traceable Mutation Adequacy Attribution.
  * Done so far: loader (C4-03), StrykerJS run (C4-02), scores (C4-04), equivalent filter (C4-05)
- * traces (C4-06), trace-signal modes (C4-07), gap classifier (C4-09) and recommendations (C4-10).
+ * traces (C4-06), trace-signal modes (C4-07), gap classifier (C4-09), recommendations (C4-10) and HTML view (C4-11).
  */
 export async function run(options: RunOptions): Promise<AdequacyReport> {
   if (!options.in) throw new Error('Missing --in <run folder>');
@@ -92,6 +94,7 @@ export async function run(options: RunOptions): Promise<AdequacyReport> {
       `[c4]   ${r.rec_id} -> ${r.route_to} ${r.gap_type} (+${r.predicted_impact}): ${r.action}`,
     );
   console.log(`[c4] wrote ${writeReport(report, options.out)}`);
+  console.log(`[c4] wrote ${writeHtml(report, options.out)}`);
   return report;
 }
 

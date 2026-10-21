@@ -1,0 +1,486 @@
+[
+  {
+    "mutant_id": "1",
+    "requirement_id": "REQ-EXPRESS-003",
+    "scenario_id": "SCN-EXPRESS-003-01",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "2",
+    "requirement_id": "REQ-EXPRESS-003",
+    "scenario_id": "SCN-EXPRESS-003-01",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "3",
+    "requirement_id": "REQ-EXPRESS-003",
+    "scenario_id": "SCN-EXPRESS-003-01",
+    "test_ids": [],
+    "gap_type": "equivalent",
+    "decided_fields": ["gap_type"]
+  },
+  {
+    "mutant_id": "4",
+    "requirement_id": "REQ-EXPRESS-003",
+    "scenario_id": "SCN-EXPRESS-003-01",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "6",
+    "requirement_id": "REQ-EXPRESS-003",
+    "scenario_id": "SCN-EXPRESS-003-01",
+    "test_ids": ["TST-EXPRESS-003-01-01", "TST-EXPRESS-003-01-02"],
+    "gap_type": "weak_assertion",
+    "decided_fields": ["gap_type"]
+  },
+  {
+    "mutant_id": "17",
+    "requirement_id": "REQ-EXPRESS-001",
+    "scenario_id": "SCN-EXPRESS-001-02",
+    "test_ids": ["TST-EXPRESS-001-01-02", "TST-EXPRESS-001-02-01"],
+    "gap_type": "untested_branch",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "18",
+    "requirement_id": "REQ-EXPRESS-001",
+    "scenario_id": "SCN-EXPRESS-001-02",
+    "test_ids": ["TST-EXPRESS-001-01-02", "TST-EXPRESS-001-02-01"],
+    "gap_type": "untested_branch",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "21",
+    "requirement_id": "REQ-EXPRESS-001",
+    "scenario_id": "SCN-EXPRESS-001-02",
+    "test_ids": ["TST-EXPRESS-001-01-02", "TST-EXPRESS-001-02-01"],
+    "gap_type": "untested_branch",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "26",
+    "requirement_id": "REQ-EXPRESS-001",
+    "scenario_id": "SCN-EXPRESS-001-01",
+    "test_ids": ["TST-EXPRESS-001-02-01"],
+    "gap_type": "untested_branch",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "28",
+    "requirement_id": "REQ-EXPRESS-001",
+    "scenario_id": "SCN-EXPRESS-001-02",
+    "test_ids": ["TST-EXPRESS-001-02-01"],
+    "gap_type": "untested_branch",
+    "decided_fields": ["scenario_id"]
+  },
+  {
+    "mutant_id": "29",
+    "requirement_id": "REQ-EXPRESS-001",
+    "scenario_id": "SCN-EXPRESS-001-01",
+    "test_ids": ["TST-EXPRESS-001-02-01"],
+    "gap_type": "untested_branch",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "30",
+    "requirement_id": "REQ-EXPRESS-001",
+    "scenario_id": "SCN-EXPRESS-001-01",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": ["gap_type"]
+  },
+  {
+    "mutant_id": "31",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "44",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "47",
+    "requirement_id": "REQ-EXPRESS-002",
+    "scenario_id": "SCN-EXPRESS-002-02",
+    "test_ids": ["TST-EXPRESS-002-02-01"],
+    "gap_type": "untested_branch",
+    "decided_fields": ["gap_type"]
+  },
+  {
+    "mutant_id": "49",
+    "requirement_id": "REQ-EXPRESS-002",
+    "scenario_id": "SCN-EXPRESS-002-02",
+    "test_ids": ["TST-EXPRESS-002-02-01"],
+    "gap_type": "weak_assertion",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "51",
+    "requirement_id": "REQ-EXPRESS-002",
+    "scenario_id": "SCN-EXPRESS-002-02",
+    "test_ids": ["TST-EXPRESS-002-02-01"],
+    "gap_type": "weak_assertion",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "53",
+    "requirement_id": "REQ-EXPRESS-002",
+    "scenario_id": "SCN-EXPRESS-002-02",
+    "test_ids": ["TST-EXPRESS-002-02-01"],
+    "gap_type": "weak_assertion",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "54",
+    "requirement_id": "REQ-EXPRESS-002",
+    "scenario_id": "SCN-EXPRESS-002-02",
+    "test_ids": ["TST-EXPRESS-002-02-01"],
+    "gap_type": "weak_assertion",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "55",
+    "requirement_id": "REQ-EXPRESS-002",
+    "scenario_id": "SCN-EXPRESS-002-02",
+    "test_ids": ["TST-EXPRESS-002-02-01"],
+    "gap_type": "weak_assertion",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "56",
+    "requirement_id": "REQ-EXPRESS-002",
+    "scenario_id": "SCN-EXPRESS-002-02",
+    "test_ids": ["TST-EXPRESS-002-02-01"],
+    "gap_type": "untested_branch",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "57",
+    "requirement_id": "REQ-EXPRESS-002",
+    "scenario_id": "SCN-EXPRESS-002-02",
+    "test_ids": ["TST-EXPRESS-002-02-01"],
+    "gap_type": "weak_assertion",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "58",
+    "requirement_id": "REQ-EXPRESS-002",
+    "scenario_id": "SCN-EXPRESS-002-02",
+    "test_ids": ["TST-EXPRESS-002-02-01"],
+    "gap_type": "weak_assertion",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "59",
+    "requirement_id": "REQ-EXPRESS-002",
+    "scenario_id": "SCN-EXPRESS-002-02",
+    "test_ids": ["TST-EXPRESS-002-02-01"],
+    "gap_type": "weak_assertion",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "60",
+    "requirement_id": "REQ-EXPRESS-002",
+    "scenario_id": "SCN-EXPRESS-002-02",
+    "test_ids": ["TST-EXPRESS-002-02-01"],
+    "gap_type": "weak_assertion",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "61",
+    "requirement_id": "REQ-EXPRESS-002",
+    "scenario_id": "SCN-EXPRESS-002-02",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": ["gap_type"]
+  },
+  {
+    "mutant_id": "64",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [
+      "TST-EXPRESS-003-01-01",
+      "TST-EXPRESS-003-01-02",
+      "TST-EXPRESS-003-01-03",
+      "TST-EXPRESS-003-02-01"
+    ],
+    "gap_type": "untested_branch",
+    "decided_fields": ["requirement_id"]
+  },
+  {
+    "mutant_id": "66",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [
+      "TST-EXPRESS-003-01-01",
+      "TST-EXPRESS-003-01-02",
+      "TST-EXPRESS-003-01-03",
+      "TST-EXPRESS-003-02-01"
+    ],
+    "gap_type": "untested_branch",
+    "decided_fields": ["requirement_id"]
+  },
+  {
+    "mutant_id": "67",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": ["requirement_id", "gap_type"]
+  },
+  {
+    "mutant_id": "72",
+    "requirement_id": "REQ-EXPRESS-003",
+    "scenario_id": "SCN-EXPRESS-003-01",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": ["gap_type"]
+  },
+  {
+    "mutant_id": "73",
+    "requirement_id": "REQ-EXPRESS-003",
+    "scenario_id": "SCN-EXPRESS-003-01",
+    "test_ids": ["TST-EXPRESS-003-01-02", "TST-EXPRESS-003-02-01"],
+    "gap_type": "untested_branch",
+    "decided_fields": ["test_ids"]
+  },
+  {
+    "mutant_id": "78",
+    "requirement_id": "REQ-EXPRESS-003",
+    "scenario_id": "SCN-EXPRESS-003-02",
+    "test_ids": ["TST-EXPRESS-003-02-01"],
+    "gap_type": "weak_assertion",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "79",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "80",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "81",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "82",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "83",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "84",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "85",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "86",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "87",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "88",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "89",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "90",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "91",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "92",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "93",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "95",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "98",
+    "requirement_id": "REQ-EXPRESS-004",
+    "scenario_id": "none",
+    "test_ids": [
+      "TST-EXPRESS-004-01-01",
+      "TST-EXPRESS-004-02-01",
+      "TST-EXPRESS-004-02-02",
+      "TST-EXPRESS-004-03-01"
+    ],
+    "gap_type": "untested_branch",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "100",
+    "requirement_id": "REQ-EXPRESS-004",
+    "scenario_id": "none",
+    "test_ids": [
+      "TST-EXPRESS-004-01-01",
+      "TST-EXPRESS-004-02-01",
+      "TST-EXPRESS-004-02-02",
+      "TST-EXPRESS-004-03-01"
+    ],
+    "gap_type": "untested_branch",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "116",
+    "requirement_id": "REQ-EXPRESS-004",
+    "scenario_id": "SCN-EXPRESS-004-02",
+    "test_ids": ["TST-EXPRESS-004-02-01", "TST-EXPRESS-004-02-02"],
+    "gap_type": "missing_boundary",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "118",
+    "requirement_id": "REQ-EXPRESS-004",
+    "scenario_id": "SCN-EXPRESS-004-03",
+    "test_ids": ["TST-EXPRESS-004-03-01"],
+    "gap_type": "untested_branch",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "124",
+    "requirement_id": "REQ-EXPRESS-004",
+    "scenario_id": "SCN-EXPRESS-004-03",
+    "test_ids": ["TST-EXPRESS-004-03-01"],
+    "gap_type": "untested_branch",
+    "decided_fields": ["gap_type"]
+  },
+  {
+    "mutant_id": "128",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": ["requirement_id", "gap_type"]
+  },
+  {
+    "mutant_id": "136",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "137",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "138",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": []
+  },
+  {
+    "mutant_id": "139",
+    "requirement_id": "none",
+    "scenario_id": "none",
+    "test_ids": [],
+    "gap_type": "missing_test",
+    "decided_fields": []
+  }
+]

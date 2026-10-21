@@ -1,0 +1,37 @@
+{
+  "contract": "shared.subject-manifest",
+  "schema_version": "1.0.0",
+  "subjects": [
+    {
+      "subject_id": "SUB-EXPRESS-5",
+      "project": "express",
+      "project_code": "EXPRESS",
+      "source": {
+        "kind": "bugsjs",
+        "bug_id": "Express-5",
+        "buggy_ref": "999546dfdeb874c20b360ad58346ed07917f3ac0",
+        "fixed_ref": "23b858835036e728006a69b5895775d5f1f8b459",
+        "repo_path": "subject-src"
+      },
+      "module_path": "lib/utils.js",
+      "exports": [
+        "isAbsolute",
+        "normalizeType",
+        "normalizeTypes",
+        "setCharset",
+        "compileETag",
+        "compileTrust"
+      ],
+      "module_system": "commonjs",
+      "requirement_ids": [
+        "REQ-EXPRESS-001",
+        "REQ-EXPRESS-002",
+        "REQ-EXPRESS-003",
+        "REQ-EXPRESS-004",
+        "REQ-EXPRESS-005"
+      ],
+      "notes": "C4 pilot fixture. Requirements, scenarios and tests are hand-written by C4 for C4-07, C4-08 and C4-12. They are not C1, C2 or C3 output. Run with --subject-root at BugsJS express, buggy_ref.",
+      "jest_config": "jest.config.js"
+    }
+  ]
+}

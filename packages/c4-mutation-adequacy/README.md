@@ -34,15 +34,73 @@ Copy `.env.example` to `.env` for model settings. Never commit `.env`.
 | C4-04 | Scores: overall, per module, per requirement (`src/scores.ts`) |
 | C4-05 | Equivalent-mutant filter with rules E1 and E2 (`src/equivalent.ts`); writes `c4/equivalent_mutants.json`. Spot-check log: `docs/equivalent-spot-check.md` |
 | C4-06 | Trace of each survivor to TST, SCN and REQ (`src/trace.ts`); `c4 run` writes `c4/adequacy_report.json` (`src/report.ts`) |
-| C4-07 | Trace-signal modes with an embedding tie-break (`src/signal.ts`, `src/embedding.ts`) |
+| C4-07 | Trace-signal modes with an embedding tie-break (`src/signal.ts`, `src/embedding.ts`). Comparison on the pilot: `docs/c4-07-comparison.md` |
+| C4-08 | Blind ground truth for the Express-5 pilot survivors: `docs/annotation/express-5/ground-truth.json`. Guideline: `docs/trace-annotation-guideline.md` |
 | C4-09 | Gap classifier: each survivor gets a gap type, evidence and an explanation (`src/gap.ts`) |
 | C4-10 | Ranked recommendations, routed to C1, C2 or C3 (`src/recommend.ts`) |
+| C4-11 | HTML view: `c4 run` also writes `c4/adequacy_report.html` (`src/html.ts`). Screenshot: `docs/c4-11-html-express-5.png` |
+| C4-12 | Trace accuracy against the ground truth (`src/accuracy.ts`, `scripts/trace-accuracy.ts`) and one before/after run: `docs/c4-12-results.md` |
 
 On the golden example, `c4 run` gives 14 mutants, 13 killed, 1 survived (mutant 12), score 0.9286.
 Mutant 12 traces to TST-EX-001-02-01 and TST-EX-001-02-06, SCN-EX-001-02 and REQ-EX-001.
 This is the same as the golden `adequacy_report.json`, and the report passes `validate.mjs`.
 The gap of mutant 12 is `weak_assertion`, and REC-001 routes it to C3 with a predicted impact of 0.0714.
 Both are the same as the golden report. Only the action text is different.
+
+## Express-5 pilot
+
+`fixtures/pilot-express-5` is a C4-owned run folder for BugsJS Express-5, `lib/utils.js`.
+C4 wrote its 5 requirements, 12 scenarios and 16 Jest tests by hand. They are not C1, C2 or C3 output.
+`scripts/pilot-express-5-fixture.py` writes the folder again.
+
+```sh
+git clone https://github.com/BugsJS/express.git /tmp/c4-subjects/express
+git -C /tmp/c4-subjects/express checkout 999546dfdeb874c20b360ad58346ed07917f3ac0
+npm --prefix /tmp/c4-subjects/express install --omit=dev --ignore-scripts
+pnpm c4 run --in fixtures/pilot-express-5 --subject-root /tmp/c4-subjects/express --out /tmp/c4-pilot-express-5
+```
+
+The run gives 138 mutants, 79 killed, 29 survived, 29 no coverage, score 0.5766.
+
+## Ground truth (C4-08)
+
+| Step | File |
+|---|---|
+| Blind packet: requirements, scenarios, tests, source and survivors, with no C4 output | `docs/annotation/express-5/packet.md` (`scripts/annotation-packet.py`) |
+| Labels from 2 annotators, made on their own: Claude Haiku and Claude Sonnet | `labels-haiku.json`, `labels-sonnet.json` |
+| Agreement (`scripts/annotation-agreement.mjs`) | `agreement.md` |
+| Disagreements decided by a person (Shajana G.) | `decisions.md` |
+| Ground truth: agreed labels plus decisions | `ground-truth.json` |
+
+| Field | Agreement | Cohen kappa |
+|---|---|---|
+| `requirement_id` | 0.931 | 0.906 |
+| `scenario_id` | 0.983 | 0.975 |
+| `test_ids` | 0.983 | 0.974 |
+| `gap_type` | 0.845 | 0.761 |
+
+## Trace accuracy and before/after (C4-12)
+
+```sh
+npx tsx scripts/trace-accuracy.ts <out>/c4/adequacy_report.json docs/annotation/express-5/ground-truth.json
+```
+
+| Field | `coverage_only` accuracy |
+|---|---|
+| requirement | 0.845 |
+| scenario | 0.759 |
+| tests | 0.983 |
+| gap type | 0.759 |
+
+`fixtures/pilot-express-5-rec-001` is the pilot with REC-001 applied: 1 new scenario and 1 new test.
+The mutation score goes from 0.5766 to 0.6569 (+0.0803). REC-001 predicted +0.0365.
+Details: `docs/c4-12-results.md`.
+
+## HTML view (C4-11)
+
+`c4 run` writes `c4/adequacy_report.html` next to the JSON report. The page is one file with no scripts and no external files.
+It shows the summary, the requirement scores, the ranked recommendations and every survivor with its trace and gap.
+To write the page again from a JSON report: `npx tsx scripts/render-html.ts <out>/c4/adequacy_report.json`.
 
 ## Equivalent-mutant rules
 
@@ -58,6 +116,7 @@ C4 checks only `Survived` and `NoCoverage` mutants. A flagged mutant gets `equiv
 - C4 copies the `--in` folder to a temp folder and runs StrykerJS there. The input folder stays clean.
 - If `--subject-root` is given, C4 copies the subject into the folder named by `source.repo_path` (default `subject-src`).
 - C4 mutates `<repo_path>/<module_path>` from `subject-manifest.json`, and uses the Jest config in `runner.config_path`.
+- If the subject has a `node_modules` folder, Jest gets its path in `modulePaths`. The StrykerJS sandbox does not copy the subject's `node_modules` link.
 
 ## Trace-signal modes
 
@@ -107,6 +166,4 @@ C4 groups the survivors that have a gap by gap type, route and scenario. Each gr
 
 ## Next Planner tasks
 
-- C4-07 comparison table: run all 3 modes on the pilots with Ollama running
-- C4-08 Blind ground truth for the pilot survivor traces
-- C4-11 HTML view of the adequacy report
+- C4-13 Demo script, slides and backup video

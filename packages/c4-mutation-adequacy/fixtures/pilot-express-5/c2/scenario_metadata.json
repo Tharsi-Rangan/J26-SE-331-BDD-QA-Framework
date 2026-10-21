@@ -1,0 +1,299 @@
+{
+  "contract": "c2.scenario-metadata",
+  "schema_version": "1.0.0",
+  "producer": {
+    "component": "MANUAL_FIXTURE",
+    "tool_version": "fixture"
+  },
+  "run_id": "RUN-FIXTURE-EXPRESS-5",
+  "generated_at": "2026-10-18T09:00:00+05:30",
+  "features": [
+    {
+      "feature_file": "c2/features/REQ-EXPRESS-001.feature",
+      "requirement_id": "REQ-EXPRESS-001",
+      "feature_name": "Absolute path detection",
+      "requirement_text_used": "The system shall treat a path as absolute when it starts with '/', when it starts with a drive letter followed by ':' and '\\', or when it starts with '\\\\'."
+    },
+    {
+      "feature_file": "c2/features/REQ-EXPRESS-002.feature",
+      "requirement_id": "REQ-EXPRESS-002",
+      "feature_name": "Media type normalisation",
+      "requirement_text_used": "The system shall convert a short type name such as 'html' to its full MIME type, and shall split a full type into its value, quality and parameters."
+    },
+    {
+      "feature_file": "c2/features/REQ-EXPRESS-003.feature",
+      "requirement_id": "REQ-EXPRESS-003",
+      "feature_name": "ETag function selection",
+      "requirement_text_used": "The system shall select the weak ETag function for true or 'weak', the strong ETag function for 'strong', no function for false, and shall reject any other value with a TypeError."
+    },
+    {
+      "feature_file": "c2/features/REQ-EXPRESS-004.feature",
+      "requirement_id": "REQ-EXPRESS-004",
+      "feature_name": "Proxy trust",
+      "requirement_text_used": "The system shall build a proxy trust function from true (trust all proxies), from a hop count n (trust the first n hops), from a comma-separated list of addresses, or from a function."
+    },
+    {
+      "feature_file": "c2/features/REQ-EXPRESS-005.feature",
+      "requirement_id": "REQ-EXPRESS-005",
+      "feature_name": "Content-Type charset",
+      "requirement_text_used": "The system shall set the charset parameter of a Content-Type value, and shall return the type unchanged when the type or the charset is missing."
+    }
+  ],
+  "scenarios": [
+    {
+      "scenario_id": "SCN-EXPRESS-001-01",
+      "requirement_id": "REQ-EXPRESS-001",
+      "feature_file": "c2/features/REQ-EXPRESS-001.feature",
+      "scenario_name": "Detect absolute POSIX and Windows paths",
+      "scenario_type": "positive",
+      "is_outline": false,
+      "verification": {
+        "syntax": "pass",
+        "requirement_consistency": {
+          "status": "pass"
+        },
+        "ep_coverage": "skipped",
+        "bva_coverage": "skipped",
+        "completeness": "pass",
+        "fully_verified": true
+      }
+    },
+    {
+      "scenario_id": "SCN-EXPRESS-001-02",
+      "requirement_id": "REQ-EXPRESS-001",
+      "feature_file": "c2/features/REQ-EXPRESS-001.feature",
+      "scenario_name": "Reject relative paths",
+      "scenario_type": "negative",
+      "is_outline": false,
+      "verification": {
+        "syntax": "pass",
+        "requirement_consistency": {
+          "status": "pass"
+        },
+        "ep_coverage": "skipped",
+        "bva_coverage": "skipped",
+        "completeness": "pass",
+        "fully_verified": true
+      }
+    },
+    {
+      "scenario_id": "SCN-EXPRESS-002-01",
+      "requirement_id": "REQ-EXPRESS-002",
+      "feature_file": "c2/features/REQ-EXPRESS-002.feature",
+      "scenario_name": "Expand a short type name",
+      "scenario_type": "positive",
+      "is_outline": false,
+      "verification": {
+        "syntax": "pass",
+        "requirement_consistency": {
+          "status": "pass"
+        },
+        "ep_coverage": "skipped",
+        "bva_coverage": "skipped",
+        "completeness": "pass",
+        "fully_verified": true
+      }
+    },
+    {
+      "scenario_id": "SCN-EXPRESS-002-02",
+      "requirement_id": "REQ-EXPRESS-002",
+      "feature_file": "c2/features/REQ-EXPRESS-002.feature",
+      "scenario_name": "Parse the quality of a full type",
+      "scenario_type": "positive",
+      "is_outline": false,
+      "verification": {
+        "syntax": "pass",
+        "requirement_consistency": {
+          "status": "pass"
+        },
+        "ep_coverage": "skipped",
+        "bva_coverage": "skipped",
+        "completeness": "pass",
+        "fully_verified": true
+      }
+    },
+    {
+      "scenario_id": "SCN-EXPRESS-002-03",
+      "requirement_id": "REQ-EXPRESS-002",
+      "feature_file": "c2/features/REQ-EXPRESS-002.feature",
+      "scenario_name": "Normalize a list of types",
+      "scenario_type": "positive",
+      "is_outline": false,
+      "verification": {
+        "syntax": "pass",
+        "requirement_consistency": {
+          "status": "pass"
+        },
+        "ep_coverage": "skipped",
+        "bva_coverage": "skipped",
+        "completeness": "pass",
+        "fully_verified": true
+      }
+    },
+    {
+      "scenario_id": "SCN-EXPRESS-003-01",
+      "requirement_id": "REQ-EXPRESS-003",
+      "feature_file": "c2/features/REQ-EXPRESS-003.feature",
+      "scenario_name": "Select the ETag function from the setting",
+      "scenario_type": "positive",
+      "is_outline": true,
+      "verification": {
+        "syntax": "pass",
+        "requirement_consistency": {
+          "status": "pass"
+        },
+        "ep_coverage": "skipped",
+        "bva_coverage": "skipped",
+        "completeness": "pass",
+        "fully_verified": true
+      },
+      "examples": [
+        {
+          "row_index": 1,
+          "values": {
+            "setting": true,
+            "kind": "weak"
+          }
+        },
+        {
+          "row_index": 2,
+          "values": {
+            "setting": "weak",
+            "kind": "weak"
+          }
+        },
+        {
+          "row_index": 3,
+          "values": {
+            "setting": false,
+            "kind": "none"
+          }
+        }
+      ]
+    },
+    {
+      "scenario_id": "SCN-EXPRESS-003-02",
+      "requirement_id": "REQ-EXPRESS-003",
+      "feature_file": "c2/features/REQ-EXPRESS-003.feature",
+      "scenario_name": "Reject an unknown ETag setting",
+      "scenario_type": "negative",
+      "is_outline": false,
+      "verification": {
+        "syntax": "pass",
+        "requirement_consistency": {
+          "status": "pass"
+        },
+        "ep_coverage": "skipped",
+        "bva_coverage": "skipped",
+        "completeness": "pass",
+        "fully_verified": true
+      }
+    },
+    {
+      "scenario_id": "SCN-EXPRESS-004-01",
+      "requirement_id": "REQ-EXPRESS-004",
+      "feature_file": "c2/features/REQ-EXPRESS-004.feature",
+      "scenario_name": "Trust all proxies with true",
+      "scenario_type": "positive",
+      "is_outline": false,
+      "verification": {
+        "syntax": "pass",
+        "requirement_consistency": {
+          "status": "pass"
+        },
+        "ep_coverage": "skipped",
+        "bva_coverage": "skipped",
+        "completeness": "pass",
+        "fully_verified": true
+      }
+    },
+    {
+      "scenario_id": "SCN-EXPRESS-004-02",
+      "requirement_id": "REQ-EXPRESS-004",
+      "feature_file": "c2/features/REQ-EXPRESS-004.feature",
+      "scenario_name": "Trust a number of hops",
+      "scenario_type": "boundary",
+      "is_outline": true,
+      "verification": {
+        "syntax": "pass",
+        "requirement_consistency": {
+          "status": "pass"
+        },
+        "ep_coverage": "skipped",
+        "bva_coverage": "skipped",
+        "completeness": "pass",
+        "fully_verified": true
+      },
+      "examples": [
+        {
+          "row_index": 1,
+          "values": {
+            "hop": 0,
+            "trusted": true
+          }
+        },
+        {
+          "row_index": 2,
+          "values": {
+            "hop": 5,
+            "trusted": false
+          }
+        }
+      ]
+    },
+    {
+      "scenario_id": "SCN-EXPRESS-004-03",
+      "requirement_id": "REQ-EXPRESS-004",
+      "feature_file": "c2/features/REQ-EXPRESS-004.feature",
+      "scenario_name": "Trust a list of addresses",
+      "scenario_type": "positive",
+      "is_outline": false,
+      "verification": {
+        "syntax": "pass",
+        "requirement_consistency": {
+          "status": "pass"
+        },
+        "ep_coverage": "skipped",
+        "bva_coverage": "skipped",
+        "completeness": "pass",
+        "fully_verified": true
+      }
+    },
+    {
+      "scenario_id": "SCN-EXPRESS-005-01",
+      "requirement_id": "REQ-EXPRESS-005",
+      "feature_file": "c2/features/REQ-EXPRESS-005.feature",
+      "scenario_name": "Set the charset of a type",
+      "scenario_type": "positive",
+      "is_outline": false,
+      "verification": {
+        "syntax": "pass",
+        "requirement_consistency": {
+          "status": "pass"
+        },
+        "ep_coverage": "skipped",
+        "bva_coverage": "skipped",
+        "completeness": "pass",
+        "fully_verified": true
+      }
+    },
+    {
+      "scenario_id": "SCN-EXPRESS-005-02",
+      "requirement_id": "REQ-EXPRESS-005",
+      "feature_file": "c2/features/REQ-EXPRESS-005.feature",
+      "scenario_name": "Keep the type when the charset is missing",
+      "scenario_type": "edge",
+      "is_outline": false,
+      "verification": {
+        "syntax": "pass",
+        "requirement_consistency": {
+          "status": "pass"
+        },
+        "ep_coverage": "skipped",
+        "bva_coverage": "skipped",
+        "completeness": "pass",
+        "fully_verified": true
+      }
+    }
+  ]
+}
