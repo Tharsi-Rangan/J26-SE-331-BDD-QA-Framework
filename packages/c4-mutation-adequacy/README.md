@@ -116,6 +116,14 @@ C4 checks only `Survived` and `NoCoverage` mutants. A flagged mutant gets `equiv
 Before StrykerJS, C4 runs the C3 tests once with Jest on the original code (`src/preflight.ts`).
 C4 writes the result to `c4/preflight.json`.
 
+To run only the preflight, with no StrykerJS:
+
+```
+pnpm c4 preflight --in runs/<RUN-ID> --subject-root <path> --out runs/<RUN-ID>
+```
+
+The exit code is 0 when the preflight passes and 1 when it fails.
+
 - The preflight fails when a test file does not load (for example a syntax error), when a test fails, or when Jest runs no tests.
 - When the preflight fails, C4 stops with exit code 1 and does not run StrykerJS. The error lists each file or test and its Jest message.
 - A manifest test that Jest did not run gets a warning and goes in `not_run`.

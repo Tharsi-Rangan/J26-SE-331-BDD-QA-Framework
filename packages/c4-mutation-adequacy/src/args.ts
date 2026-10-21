@@ -4,6 +4,8 @@ import { TRACE_SIGNAL_MODES, type TraceSignalMode } from './signal.js';
 
 /** Options every component CLI accepts (docs/INTEGRATION_RULES.md section 4). */
 export interface RunOptions {
+  /** `preflight` runs only the Jest check of the C3 tests, with no StrykerJS. */
+  command: 'run' | 'preflight';
   in?: string;
   out: string;
   srs?: string;
@@ -12,7 +14,7 @@ export interface RunOptions {
 }
 
 /**
- * Parse `c4 run --in runs/<RUN-ID> --subject-root <path> --out runs/<RUN-ID> [--trace-signal <mode>]`.
+ * Parse `c4 run|preflight --in runs/<RUN-ID> --subject-root <path> --out runs/<RUN-ID> [--trace-signal <mode>]`.
  * Throws an Error with a readable message when the command line is wrong.
  */
 export function parseRunArgs(argv: string[], baseDir = callerDir()): RunOptions {
@@ -27,8 +29,11 @@ export function parseRunArgs(argv: string[], baseDir = callerDir()): RunOptions 
       'trace-signal': { type: 'string', default: 'coverage_only' },
     },
   });
-  if (positionals[0] !== 'run') {
-    throw new Error('Usage: c4 run --in runs/<RUN-ID> --subject-root <path> --out runs/<RUN-ID>');
+  const command = positionals[0];
+  if (command !== 'run' && command !== 'preflight') {
+    throw new Error(
+      'Usage: c4 run|preflight --in runs/<RUN-ID> --subject-root <path> --out runs/<RUN-ID>',
+    );
   }
   if (!values.out) {
     throw new Error('Missing --out <run folder>');
@@ -39,6 +44,7 @@ export function parseRunArgs(argv: string[], baseDir = callerDir()): RunOptions 
   }
   const abs = (p?: string) => (p === undefined ? undefined : path.resolve(baseDir, p));
   return {
+    command,
     in: abs(values.in),
     out: path.resolve(baseDir, values.out),
     srs: abs(values.srs),

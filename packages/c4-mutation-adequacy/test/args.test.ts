@@ -19,6 +19,11 @@ describe('c4 parseRunArgs', () => {
     );
   });
 
+  test('reads the preflight command', () => {
+    expect(parseRunArgs(['preflight', '--in', 'r', '--out', 'r']).command).toBe('preflight');
+    expect(parseRunArgs(['run', '--out', 'x']).command).toBe('run');
+  });
+
   test('rejects a missing run command', () => {
     expect(() => parseRunArgs(['--out', 'x'])).toThrow(/Usage/);
   });

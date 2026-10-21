@@ -27,6 +27,21 @@ export { runStryker } from './stryker.js';
 export { buildSurvivors, testsByStrykerId, traceMutant } from './trace.js';
 
 /**
+ * `c4 preflight`: load the inputs and run the C3 tests once with Jest on the original code.
+ * Returns true when the preflight passes.
+ */
+export function preflight(options: RunOptions): boolean {
+  if (!options.in) throw new Error('Missing --in <run folder>');
+  const inputs = loadInputs(options.in, options.subjectRoot);
+  console.log(`[c4] ${inputs.manifest.tests.length} tests for ${inputs.subject.subject_id}`);
+  const work = prepareWorkDir(inputs);
+  const result = runPreflight(inputs, work, options.out);
+  for (const line of preflightProblems(result)) console.error(`[c4]   ${line}`);
+  fs.rmSync(work, { recursive: true, force: true });
+  return result.status === 'pass';
+}
+
+/**
  * Requirement-Traceable Mutation Adequacy Attribution.
  * Done so far: loader (C4-03), preflight of the C3 tests, StrykerJS run (C4-02), scores (C4-04), equivalent filter (C4-05)
  * traces (C4-06), trace-signal modes (C4-07), gap classifier (C4-09), recommendations (C4-10) and HTML view (C4-11).

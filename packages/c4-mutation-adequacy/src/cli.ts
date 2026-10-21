@@ -3,11 +3,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseRunArgs } from './args.js';
-import { run } from './index.js';
+import { preflight, run } from './index.js';
 
 try {
   const options = parseRunArgs(process.argv.slice(2));
   fs.mkdirSync(path.join(options.out, 'c4'), { recursive: true });
+  if (options.command === 'preflight') process.exit(preflight(options) ? 0 : 1);
   await run(options);
   process.exit(0);
 } catch (err) {
