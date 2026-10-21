@@ -81,8 +81,8 @@ export function prepareWorkDir(inputs: C4Inputs): string {
 export function runStryker(
   inputs: C4Inputs,
   log: (line: string) => void = console.log,
+  work: string = prepareWorkDir(inputs),
 ): StrykerResult {
-  const work = prepareWorkDir(inputs);
   const config = strykerConfig(inputs);
   fs.writeFileSync(path.join(work, 'stryker.config.json'), JSON.stringify(config, null, 2));
 

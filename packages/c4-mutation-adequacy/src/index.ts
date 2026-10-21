@@ -9,7 +9,8 @@ import { loadInputs, loadMockDecisions, loadScenarioMetadata } from './loader.js
 import { buildReport, writeReport, type AdequacyReport } from './report.js';
 import { aggregateScores, type Scores } from './scores.js';
 import { applyTraceSignal, traceTexts } from './signal.js';
-import { runStryker } from './stryker.js';
+import { preflightProblems, runPreflight } from './preflight.js';
+import { prepareWorkDir, runStryker } from './stryker.js';
 import { buildSurvivors, testsByStrykerId, unmatchedTestNames, type Survivor } from './trace.js';
 
 export type { RunOptions } from './args.js';
@@ -21,12 +22,13 @@ export { loadInputs, loadMockDecisions, loadScenarioMetadata } from './loader.js
 export { buildReport, writeReport } from './report.js';
 export { aggregateScores } from './scores.js';
 export { applyTraceSignal, traceTexts } from './signal.js';
+export { preflightProblems, runPreflight, summarizePreflight } from './preflight.js';
 export { runStryker } from './stryker.js';
 export { buildSurvivors, testsByStrykerId, traceMutant } from './trace.js';
 
 /**
  * Requirement-Traceable Mutation Adequacy Attribution.
- * Done so far: loader (C4-03), StrykerJS run (C4-02), scores (C4-04), equivalent filter (C4-05)
+ * Done so far: loader (C4-03), preflight of the C3 tests, StrykerJS run (C4-02), scores (C4-04), equivalent filter (C4-05)
  * traces (C4-06), trace-signal modes (C4-07), gap classifier (C4-09), recommendations (C4-10) and HTML view (C4-11).
  */
 export async function run(options: RunOptions): Promise<AdequacyReport> {
@@ -38,7 +40,15 @@ export async function run(options: RunOptions): Promise<AdequacyReport> {
     `[c4] ${inputs.manifest.tests.length} tests for ${inputs.subject.subject_id}; mutating ${inputs.mutate.join(', ')}`,
   );
 
-  const { report: mutation, strykerVersion } = runStryker(inputs);
+  const work = prepareWorkDir(inputs);
+  const preflight = runPreflight(inputs, work, options.out);
+  if (preflight.status === 'fail')
+    throw new Error(
+      `Preflight failed, so C4 did not run StrykerJS. Work folder kept at ${work}\n  ` +
+        preflightProblems(preflight).join('\n  '),
+    );
+
+  const { report: mutation, strykerVersion } = runStryker(inputs, console.log, work);
   const rawFile = path.join(options.out, 'c4', 'raw', 'mutation.json');
   fs.mkdirSync(path.dirname(rawFile), { recursive: true });
   fs.writeFileSync(rawFile, JSON.stringify(mutation, null, 2));
