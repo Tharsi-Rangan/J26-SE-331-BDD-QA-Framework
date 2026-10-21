@@ -1,15 +1,138 @@
-import type { RunOptions } from './args.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import type { RunOptions, ScanCommandOptions } from './args.js';
 import { readC3Inputs } from './input/reader.js';
+import type { C3Inputs } from './input/types.js';
+import {
+  defaultBehaviourWork,
+  deriveMockBehaviours,
+  type BehaviourWorkFile,
+} from './mock/behaviour.js';
+import { buildMockDecisions, type MockDecision } from './mock/decisions.js';
+import { planAssertions, planContext } from './assert/plan.js';
+import { chooseStrategies } from './strategy.js';
+import {
+  TEST_ROOT,
+  writeJestTests,
+  type WriterInputs,
+  type WrittenFiles,
+} from './writer/jest-writer.js';
+import { makeSandbox, removeSandbox, runJest, type JestRunResult } from './runner/jest.js';
+import { applyVerification, verifyTests, type VerificationWorkFile } from './verify/verify.js';
+import { MAX_REPAIR_ROUNDS, repairLoop } from './verify/repair.js';
+import { confidenceReport, routeScenarios, stubEntry, stubFile } from './route/confidence.js';
+import { renderCase } from './assert/templates.js';
+import { createModelClient, readModelConfig, type ModelClient } from './model/index.js';
+import { scanModule } from './scan/scanner.js';
+import type { ModuleScan } from './scan/types.js';
 
-export type { RunOptions } from './args.js';
+export type { RunOptions, ScanCommandOptions } from './args.js';
 export { readC3Inputs, C3InputError } from './input/reader.js';
 export type * from './input/types.js';
+export { scanModule, classifySpecifier } from './scan/scanner.js';
+export type * from './scan/types.js';
+export { buildMockDecisions, chooseTargetExports } from './mock/decisions.js';
+export type { MockDecision, MockDecisionsFile, TargetChoice } from './mock/decisions.js';
+export { RULES, RULES_VERSION, decide } from './mock/rules.js';
+export {
+  BEHAVIOUR_KINDS,
+  BEHAVIOUR_PROMPT_VERSION,
+  behaviourPrompt,
+  behaviourToJest,
+  checkAnswer,
+  defaultBehaviourWork,
+  defaultStructured,
+  deriveMockBehaviours,
+  usesResult,
+} from './mock/behaviour.js';
+export type {
+  BehaviourKind,
+  BehaviourRecord,
+  BehaviourWorkFile,
+  StructuredBehaviour,
+} from './mock/behaviour.js';
+export * from './model/index.js';
+export {
+  ASSERTION_CATEGORIES,
+  ASSERTION_PROMPT_VERSION,
+  assertionPrompt,
+  buildCases,
+  checkAssertionAnswer,
+  mockLocalName,
+  mockTarget,
+  planAssertions,
+  planContext,
+  planScenario,
+  ruleCategories,
+  ruleCategory,
+} from './assert/plan.js';
+export type {
+  AssertionCategory,
+  AssertionSlot,
+  AssertionWorkFile,
+  PlanCase,
+  PlanContext,
+  ScenarioPlan,
+} from './assert/plan.js';
+export { renderCase, TEMPLATE_NOTES } from './assert/templates.js';
+export { chooseStrategies, chooseStrategy, STRATEGY_RULES_VERSION } from './strategy.js';
+export type { Strategy, StrategyChoice } from './strategy.js';
+export {
+  caseLabel,
+  JEST_CONFIG,
+  jestConfig,
+  rowValue,
+  TEST_ROOT,
+  testId,
+  writeJestTests,
+} from './writer/jest-writer.js';
+export type { ManifestTest, TestManifestFile, WrittenFiles } from './writer/jest-writer.js';
+export { makeSandbox, removeSandbox, runJest } from './runner/jest.js';
+export {
+  applyVerification,
+  classifyFailure,
+  isBroken,
+  referentialProblems,
+  semanticScore,
+  syntaxError,
+  verifyTests,
+  VERIFY_VERSION,
+} from './verify/verify.js';
+export type { RunStatus, TestVerification, VerificationWorkFile } from './verify/verify.js';
+export { brokenScenarios, MAX_REPAIR_ROUNDS, repairLoop, repairMessages } from './verify/repair.js';
+export type { RepairLogEntry, RepairResult } from './verify/repair.js';
+export {
+  confidenceOf,
+  confidenceReport,
+  FORMULA_VERSION,
+  routeScenarios,
+  signalsFor,
+  stubFile,
+  stubId,
+  THRESHOLD,
+  WEIGHTS,
+} from './route/confidence.js';
+export type { ConfidenceReportFile, ReportScenario, Route, Signals } from './route/confidence.js';
+export type { JestRunResult, JestTestResult } from './runner/jest.js';
+export { checkExpression, paramName, renderValue, replacePlaceholders } from './assert/expr.js';
+
+/** C3's version, written as producer.tool_version in every contract file. */
+export const TOOL_VERSION: string = JSON.parse(
+  fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+).version;
+
+/** Internal (non-contract) work files go here, next to the contract files in <out>/c3/. */
+export const WORK_DIR = 'c3/work';
 
 /**
  * Runnable Test Generation with Explainable Assertions and Mocking.
- * Done so far: C3-03 input reader. Next: C3-04 ts-morph dependency scan.
+ * Done so far: C3-03 input reader, C3-04 dependency scan, C3-05 rule-based mock decisions,
+ * C3-06 model client, C3-07 mock behaviour from the Given/When steps, C3-08 typed assertions,
+ * C3-09 strategy selection, C3-10 Jest writer + test_manifest.json, C3-11 four-layer verification.
  */
-export async function run(options: RunOptions): Promise<void> {
+export async function run(
+  options: RunOptions & { generatedAt?: string; model?: ModelClient },
+): Promise<void> {
   if (!options.in) throw new Error('Missing --in <run folder>');
   const inputs = readC3Inputs(options.in);
   console.log(
@@ -22,4 +145,371 @@ export async function run(options: RunOptions): Promise<void> {
     );
   }
   for (const s of inputs.skipped) console.log(`  skip ${s.scenarioId}: ${s.reason}`);
+
+  const scans = scanSubjects(inputs, options.subjectRoot);
+  if (scans.length) {
+    const file = path.join(options.out, WORK_DIR, 'dependency_scan.json');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(scans, null, 2) + '\n');
+    for (const s of scans) printScan(s.scan, `${s.subjectId}:`);
+    console.log(`[c3] dependency scan written to ${file}`);
+  }
+
+  // C3-05: rule-based mock / no_mock decisions -> c3/mock_decisions.json (contract file)
+  if (scans.length && inputs.scenarios.length) {
+    const index = new Map(scans.map((s) => [`${s.subjectId}|${s.modulePath}`, s.scan]));
+    const built = buildMockDecisions(inputs, index, {
+      generatedAt: options.generatedAt,
+      toolVersion: TOOL_VERSION,
+    });
+    const { targets } = built;
+    let file = built.file;
+
+    // C3-07: the model fills the behaviour of each 'mock' decision from the Given/When steps.
+    let work: BehaviourWorkFile;
+    if (options.model && file.decisions.some((d) => d.decision === 'mock')) {
+      console.log(`[c3] mock behaviour (C3-07) with ${options.model.modelTag}:`);
+      const derived = await deriveMockBehaviours(file, inputs, options.model, {
+        targets,
+        callSites: callSitesFrom(scans),
+        log: (l) => console.log(l),
+      });
+      file = derived.file;
+      work = derived.work;
+    } else {
+      work = defaultBehaviourWork(file);
+    }
+    writeJson(path.join(options.out, WORK_DIR, 'mock_behaviour.json'), work);
+
+    const out = path.join(options.out, 'c3', 'mock_decisions.json');
+    writeJson(out, file);
+    console.log(`[c3] mock decisions (rules ${file.rules_version}):`);
+    for (const sc of inputs.scenarios) {
+      console.log(`  ${sc.scenarioId} tests ${targets.get(sc.scenarioId)?.exports.join(', ')}`);
+      for (const d of file.decisions.filter((x) => x.scenario_id === sc.scenarioId)) {
+        const dep = `${d.dependency.import_specifier}#${d.dependency.symbol}`;
+        console.log(`    ${d.decision_id} ${d.decision.padEnd(7)} ${d.rule_id} ${dep}`);
+        if (d.behaviour) console.log(`      behaviour: ${d.behaviour.summary}`);
+      }
+    }
+    console.log(`[c3] mock decisions written to ${out}`);
+
+    // C3-08: typed assertions (one model call per scenario) -> c3/work/assertion_plan.json
+    const contexts = inputs.scenarios.map((sc) => {
+      const scan = index.get(`${sc.subject.subjectId}|${sc.subject.modulePath}`)!;
+      return planContext(sc, scan.exports, targets.get(sc.scenarioId)?.exports ?? [], file, work);
+    });
+    console.log(
+      `[c3] assertions (C3-08)${options.model ? ` with ${options.model.modelTag}` : ': no model, so no scenario can be planned'}:`,
+    );
+    const plans = await planAssertions(contexts, options.model, { log: (l) => console.log(l) });
+    writeJson(path.join(options.out, WORK_DIR, 'assertion_plan.json'), plans);
+
+    // C3-09: test strategy per scenario (rules) -> c3/work/strategy.json
+    const strategies = chooseStrategies(inputs.scenarios);
+    writeJson(path.join(options.out, WORK_DIR, 'strategy.json'), strategies);
+    console.log(`[c3] strategy (rules ${strategies.rules_version}):`);
+    for (const c of strategies.choices)
+      console.log(`  ${c.scenario_id} ${c.strategy} (${c.rule_id}): ${c.reason}`);
+
+    // C3-10 + C3-11: Jest files and test_manifest.json, then the 4 checks and a Jest run on the subject
+    const subjectRoot = resolveSubjectRoot(inputs, options.subjectRoot);
+    const writerInputs = {
+      inputs,
+      strategies: strategies.choices,
+      mockFile: file,
+      behaviour: work,
+      exports: new Map(scans.map((x) => [x.modulePath, x.scan.exports])),
+      generatedAt: options.generatedAt,
+      toolVersion: TOOL_VERSION,
+    };
+    let verified = writeAndVerify({ ...writerInputs, plans }, subjectRoot);
+
+    // C3-12: repair broken tests (max 3 rounds); a scenario still broken gets no runnable test
+    const repair = await repairLoop(
+      plans,
+      verified.verification,
+      new Map(contexts.map((c) => [c.sc.scenarioId, c])),
+      options.model,
+      (p) => {
+        verified = writeAndVerify({ ...writerInputs, plans: p }, subjectRoot);
+        return verified.verification;
+      },
+      { log: (l) => console.log(l) },
+    );
+    if (repair.log.length) {
+      console.log(
+        `[c3] repair (C3-12): ${repair.log.length} round(s) logged, ${repair.gaveUp.size} scenario(s) given up`,
+      );
+      if (repair.gaveUp.size)
+        verified = writeAndVerify({ ...writerInputs, plans: repair.plans }, subjectRoot);
+    }
+    writeJson(path.join(options.out, WORK_DIR, 'assertion_plan.json'), repair.plans);
+    writeJson(path.join(options.out, WORK_DIR, 'repair_log.json'), {
+      max_rounds: MAX_REPAIR_ROUNDS,
+      entries: repair.log,
+    });
+    const { verification } = verified;
+    let { written } = verified;
+
+    // C3-13: confidence per scenario -> runnable or stub; low-confidence tests leave the runnable files
+    const routeInputs = {
+      inputs,
+      plans: repair.plans.plans,
+      written,
+      verification,
+      repairRounds: repair.rounds,
+      mockFile: file,
+      behaviour: work,
+    };
+    const routed = routeScenarios(routeInputs);
+    const lowConfidence = new Set(
+      routed
+        .filter(
+          (r) =>
+            r.route === 'stub' &&
+            written.manifest.tests.some((t) => t.scenario_id === r.scenario_id),
+        )
+        .map((r) => r.scenario_id),
+    );
+    if (lowConfidence.size)
+      written = writeJestTests({
+        ...writerInputs,
+        plans: {
+          ...repair.plans,
+          plans: repair.plans.plans.map((p) =>
+            lowConfidence.has(p.scenario_id) ? { ...p, source: 'failed' as const } : p,
+          ),
+        },
+      });
+    written.manifest.tests = applyVerification(written.manifest.tests, verification).map((t) => ({
+      ...t,
+      repair_rounds: repair.rounds.get(t.scenario_id) ?? 0,
+    }));
+
+    const scOf = new Map(inputs.scenarios.map((sc) => [sc.scenarioId, sc]));
+    const planOf = new Map(repair.plans.plans.map((p) => [p.scenario_id, p]));
+    const stubFiles = new Map<string, string>();
+    written.manifest.stubs = routed
+      .filter((r) => r.route === 'stub')
+      .map((r) => {
+        const sc = scOf.get(r.scenario_id)!;
+        const plan = planOf.get(r.scenario_id);
+        let draft: string | undefined;
+        try {
+          draft =
+            plan?.act_code && plan.cases[0]
+              ? renderCase(plan, plan.cases[0]).join('\n')
+              : undefined;
+        } catch {
+          draft = undefined;
+        }
+        const entry = stubEntry(sc, r.reason);
+        stubFiles.set(entry.file, stubFile(sc, r.reason, draft));
+        return entry;
+      });
+
+    for (const dir of [TEST_ROOT, 'c3/test_stubs'])
+      fs.rmSync(path.join(options.out, dir), { recursive: true, force: true });
+    for (const [rel, content] of [...written.files, ...stubFiles]) {
+      const f = path.join(options.out, rel);
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.writeFileSync(f, content);
+    }
+    writeJson(path.join(options.out, 'c3', 'test_manifest.json'), written.manifest);
+    writeJson(path.join(options.out, WORK_DIR, 'verification.json'), verification);
+    const report = confidenceReport({ ...routeInputs, written }, routed, {
+      generatedAt: options.generatedAt,
+      toolVersion: TOOL_VERSION,
+      model: written.manifest.producer.model,
+    });
+    writeJson(path.join(options.out, 'c3', 'generation_confidence_report.json'), report);
+
+    console.log(
+      `[c3] Jest tests (C3-10): ${written.manifest.tests.length} test(s) in ${written.files.size - 1} file(s), ${written.manifest.stubs.length} stub(s)`,
+    );
+    for (const f of [...written.files.keys(), ...stubFiles.keys()].filter(
+      (k) => k !== 'c3/jest.config.cjs',
+    ))
+      console.log(`  ${f}`);
+    printVerification(verification, subjectRoot);
+    console.log(
+      `[c3] confidence (C3-13, formula ${report.formula.version}, threshold ${report.formula.threshold}):`,
+    );
+    for (const r of routed)
+      console.log(
+        `  ${r.scenario_id} ${r.route.padEnd(8)} ${r.confidence.toFixed(3)}  ${r.reason}`,
+      );
+  }
+}
+
+/** Where the subject is: --subject-root, or the manifest's source.repo_path inside the --in folder. */
+export function resolveSubjectRoot(inputs: C3Inputs, subjectRoot?: string): string | undefined {
+  if (subjectRoot) return subjectRoot;
+  const rp = inputs.scenarios[0]?.subject.source['repo_path'];
+  const dir = typeof rp === 'string' ? path.join(inputs.inDir, rp) : undefined;
+  return dir && fs.existsSync(dir) ? dir : undefined;
+}
+
+/** C3-10 + C3-11: write the tests (in memory), run them in a sandbox, and verify every test. */
+export function writeAndVerify(
+  w: WriterInputs,
+  subjectRoot: string | undefined,
+): { written: WrittenFiles; verification: VerificationWorkFile; jest?: JestRunResult } {
+  const written = writeJestTests(w);
+  let jest: JestRunResult | undefined;
+  if (subjectRoot && written.manifest.tests.length) {
+    const repoPath = written.requires.values().next().value?.repoPath ?? 'subject-src';
+    const sb = makeSandbox({
+      runDir: '',
+      subjectRoot,
+      repoPath,
+      copyRun: false,
+      overrides: written.files,
+    });
+    try {
+      jest = runJest(sb);
+    } finally {
+      removeSandbox(sb);
+    }
+  }
+  const verification = verifyTests({
+    inputs: w.inputs,
+    plans: w.plans.plans,
+    written,
+    exports: w.exports,
+    subjectRoot,
+    jest,
+  });
+  return { written, verification, jest };
+}
+
+function printVerification(v: VerificationWorkFile, subjectRoot?: string): void {
+  const count = (k: string) => v.tests.filter((t) => t.run === k).length;
+  console.log(
+    `[c3] verification (C3-11)${subjectRoot ? ` on ${subjectRoot}` : ': no subject, so no Jest run'}:`,
+  );
+  if (v.subject_run)
+    console.log(
+      `  Jest: ${count('passed')} passed, ${count('assertion_failed')} assertion failed, ${count('subject_error')} subject error, ${count('test_error') + count('suite_error')} broken`,
+    );
+  for (const t of v.tests) {
+    const checks = `syn ${t.syntactic}, ref ${t.referential}, trace ${t.traceability}, sem ${t.semantic.status} ${t.semantic.score}`;
+    console.log(`  ${t.test_id} ${t.run.padEnd(16)} ${checks}`);
+    if (t.run !== 'passed' && t.message) console.log(`    ${t.message.split('\n')[0]}`);
+  }
+}
+
+/** For C3-07: the source lines of the module under test that use a decision's dependency. */
+export function callSitesFrom(scans: SubjectScan[]): (d: MockDecision) => string[] {
+  const sources = new Map<string, string[]>();
+  return (d) => {
+    const s = scans.find((x) => x.modulePath === d.module_path);
+    if (!s) return [];
+    const dep = s.scan.dependencies.find(
+      (x) =>
+        x.importSpecifier === d.dependency.import_specifier && x.symbol === d.dependency.symbol,
+    );
+    if (!dep) return [];
+    const file = path.join(s.scan.subjectRoot, s.scan.modulePath);
+    if (!sources.has(file)) sources.set(file, fs.readFileSync(file, 'utf8').split(/\r?\n/));
+    const lines = sources.get(file)!;
+    return dep.lines
+      .slice(0, 5)
+      .map((n) => lines[n - 1] ?? '')
+      .filter((l) => l.trim());
+  };
+}
+
+function writeJson(file: string, data: unknown): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n');
+}
+
+export interface SubjectScan {
+  subjectId: string;
+  modulePath: string;
+  scan: ModuleScan;
+}
+
+/**
+ * C3-04: scan the module of every subject that has a scenario to build.
+ * Subject folder = --subject-root, or the manifest's source.repo_path inside the run folder (golden fixtures).
+ */
+export function scanSubjects(inputs: C3Inputs, subjectRoot?: string): SubjectScan[] {
+  const out: SubjectScan[] = [];
+  const seen = new Set<string>();
+  for (const sc of inputs.scenarios) {
+    const subject = sc.subject;
+    const id = `${subject.subjectId}|${subject.modulePath}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const repoPath = subject.source['repo_path'];
+    const root =
+      subjectRoot ?? (typeof repoPath === 'string' ? path.join(inputs.inDir, repoPath) : undefined);
+    if (!root) {
+      console.log(
+        `  scan skipped for ${subject.subjectId}: pass --subject-root <checked-out subject>`,
+      );
+      continue;
+    }
+    out.push({
+      subjectId: subject.subjectId,
+      modulePath: subject.modulePath,
+      scan: scanModule(root, subject.modulePath, { expectedExports: subject.exports }),
+    });
+  }
+  return out;
+}
+
+/** `c3 scan`: scan one module and print a summary (and save the full JSON with --out). */
+export function scanCommand(options: ScanCommandOptions): ModuleScan {
+  const scan = scanModule(options.subjectRoot, options.module, {
+    expectedExports: options.exports,
+  });
+  printScan(scan, '');
+  if (options.out) {
+    fs.mkdirSync(path.dirname(options.out), { recursive: true });
+    fs.writeFileSync(options.out, JSON.stringify(scan, null, 2) + '\n');
+    console.log(`[c3] scan written to ${options.out}`);
+  }
+  return scan;
+}
+
+function printScan(scan: ModuleScan, prefix: string): void {
+  console.log(
+    `[c3] scan ${prefix}${scan.modulePath}: ${scan.imports.length} import(s), ${scan.dependencies.length} used dependency symbol(s)`,
+  );
+  for (const d of scan.dependencies) {
+    const where = d.resolvedPath ? ` -> ${d.resolvedPath}` : '';
+    console.log(`  dep  ${d.key} [${d.kind}]${where} lines ${d.lines.join(',')}`);
+  }
+  for (const e of scan.exports) {
+    console.log(
+      `  export ${e.name}: ${e.dependencies.length ? e.dependencies.join(', ') : '(none)'}`,
+    );
+  }
+  if (scan.moduleLoadDependencies.length) {
+    console.log(`  on require(): ${scan.moduleLoadDependencies.join(', ')}`);
+  }
+  for (const w of scan.warnings) console.log(`  warning: ${w}`);
+}
+
+/**
+ * `c3 model-check` (C3-06 / SH-07 evidence): one tiny call to the model in .env, cache off,
+ * so you see the real server, the model tag and how long it took.
+ */
+export async function modelCheck(client?: ModelClient): Promise<string> {
+  const config = readModelConfig();
+  const c = client ?? createModelClient({ ...config, cacheMode: 'off' });
+  console.log(`[c3] model-check: ${c.modelTag} at ${config.baseUrl}`);
+  const res = await c.complete({
+    messages: [{ role: 'user', content: 'Reply with exactly the word OK.' }],
+    maxTokens: 5,
+    purpose: 'model-check',
+  });
+  console.log(
+    `[c3] answer "${res.text.trim()}" from ${res.model} via ${res.provider} in ${res.latencyMs} ms`,
+  );
+  return res.text;
 }

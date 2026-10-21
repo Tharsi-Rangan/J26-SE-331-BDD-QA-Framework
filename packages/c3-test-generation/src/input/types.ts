@@ -53,6 +53,8 @@ export interface C3ScenarioInput {
   scenarioId: string;
   requirementId: string;
   scenarioName: string;
+  /** `Feature:` title of the .feature file (C3-10 uses it in the describe title). */
+  featureName: string;
   scenarioType: string;
   isOutline: boolean;
   featureFile: string; // relative to the run folder, with '/'
