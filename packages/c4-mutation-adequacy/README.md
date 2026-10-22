@@ -62,6 +62,33 @@ pnpm c4 run --in fixtures/pilot-express-5 --subject-root /tmp/c4-subjects/expres
 
 The run gives 138 mutants, 79 killed, 29 survived, 29 no coverage, score 0.5766.
 
+## Demo 2: Express-5 preflight, before and after
+
+Run from the repo root. You need the Express clone from the "Express-5 pilot" section.
+
+1. Preflight. It must show `16/16 tests pass`.
+
+   ```sh
+   pnpm c4 preflight --in packages/c4-mutation-adequacy/fixtures/pilot-express-5 \
+     --subject-root /tmp/c4-subjects/express --out runs/c4-preflight-express-5
+   ```
+
+2. Before run. Score 0.5766, REC-001 routes to C2 (+0.0365).
+
+   ```sh
+   pnpm c4 run --in packages/c4-mutation-adequacy/fixtures/pilot-express-5 \
+     --subject-root /tmp/c4-subjects/express --out runs/c4-demo-express-5-before
+   open runs/c4-demo-express-5-before/c4/adequacy_report.html
+   ```
+
+3. After run, with REC-001 applied. Score 0.6569 (+0.0803).
+
+   ```sh
+   pnpm c4 run --in packages/c4-mutation-adequacy/fixtures/pilot-express-5-rec-001 \
+     --subject-root /tmp/c4-subjects/express --out runs/c4-demo-express-5-after
+   open runs/c4-demo-express-5-after/c4/adequacy_report.html
+   ```
+
 ## Ground truth (C4-08)
 
 | Step | File |
