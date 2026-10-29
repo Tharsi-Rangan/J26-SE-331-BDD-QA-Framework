@@ -3,6 +3,7 @@ runs/
 reports/
 .stryker-tmp/
 .env
+model-cache/
 __pycache__/
 .venv/
 dist/
